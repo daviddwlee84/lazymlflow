@@ -11,6 +11,7 @@ import pty
 import re
 import select
 import signal
+import sqlite3
 import struct
 import subprocess
 import tempfile
@@ -148,6 +149,14 @@ class Terminal:
         while time.monotonic() < until:
             self.pump(0.02)
 
+    def mouse(self, code, x, y, release=False):
+        """Terminal SGR protocol uses one-based cell coordinates."""
+        self.send(f"\x1b[<{code};{x + 1};{y + 1}{'m' if release else 'M'}")
+
+    def click(self, x, y):
+        self.mouse(0, x, y)
+        self.mouse(0, x, y, release=True)
+
     def close(self):
         if self.process.poll() is None:
             self.send("\x03")
@@ -179,15 +188,38 @@ def main():
                 f'[[targets]]\nid = "{fixture.name}"\ntracking_uri = "{fixture.url}"\n'
                 for fixture in fixtures), encoding="utf-8")
             env = {k: v for k, v in os.environ.items() if k not in ("LAZYMLFLOW_TARGET", "MLFLOW_TRACKING_URI")}
-            env.update(TERM="xterm-256color", NO_COLOR="1", XDG_CONFIG_HOME=str(root / "config"))
+            env.update(TERM="xterm-256color", NO_COLOR="1", XDG_CONFIG_HOME=str(root / "config"),
+                       XDG_DATA_HOME=str(root / "data"), XDG_STATE_HOME=str(root / "state"))
             terminal = Terminal([binary, "--config", str(config)], env, root)
             terminal.wait(lambda: "one-run-0" in terminal.text(), "initial experiments and runs")
+            terminal.wait(lambda: b"\x1b[?1002h" in terminal.raw, "mouse reporting enabled")
+            # Click experiment rows through the actual terminal parser. The
+            # wide layout begins at y=1, with a border and one status line.
+            terminal.click(8, 4)
+            terminal.wait(lambda: any(p.endswith("runs/search") and q["experiment_ids"] == ["2"] for p, q in fixtures[0].events), "mouse selects experiment")
+            terminal.click(8, 3)
             terminal.send("j")
             terminal.wait(lambda: any(p.endswith("runs/search") and q["experiment_ids"] == ["2"] for p, q in fixtures[0].events), "Vim experiment navigation")
             terminal.send("\x1b[A")
-            terminal.send("\t/jkhql/?")
+            terminal.send("2/jkhql/?123M")
             assert terminal.process.poll() is None, "typing q exited application"
             terminal.send("\x1b")
+            # Same grouped searchable column picker as the visible web UI:
+            # search, leave typing, select a checkbox, close, persist.
+            terminal.send("vParameters / lr\r \x1b")
+            state_path = root / "data" / "lazymlflow" / "state.db"
+
+            def saved_view():
+                if not state_path.exists():
+                    return None
+                try:
+                    with sqlite3.connect(f"file:{state_path}?mode=ro", uri=True, timeout=0.1) as db:
+                        row = db.execute("SELECT value FROM experiment_views WHERE experiment='1'").fetchone()
+                        return json.loads(row[0]) if row else None
+                except sqlite3.Error:
+                    return None
+
+            terminal.wait(lambda: saved_view() is not None and any(c["kind"] == "param" and c["key"] == "lr" for c in saved_view()["columns"]), "column checkbox persisted to SQLite")
             start = len(fixtures[0].events)
             terminal.send("fmetrics.loss < 0.5\r")
             terminal.wait(lambda: any(p.endswith("runs/search") and q.get("filter") == "metrics.loss < 0.5" for p, q in fixtures[0].events[start:]), "submitted server filter")
@@ -199,6 +231,21 @@ def main():
             terminal.wait(lambda: sum(p.endswith("metrics/get-history") for p, _ in fixtures[0].events) >= 2, "metric history for selected runs")
             terminal.send("a")
             terminal.send("\x1b")
+            terminal.send("2bParameter / lr\r \x1b")
+            terminal.wait(lambda: saved_view() is not None and saved_view().get("group_by") == ["lr"], "parameter grouping persisted")
+            terminal.send("bLayout: flat\r \x1b")
+            terminal.wait(lambda: saved_view() is not None and saved_view().get("mode") == "flat", "return to flat table")
+            # Numeric pane keys, zoom, resize gesture, and capture toggle are
+            # explicit navigation actions, not active while editing fields.
+            terminal.send("1z")
+            terminal.send("z2\x17ll\r")
+            terminal.mouse(0, 41, 10)
+            terminal.mouse(32, 47, 10)
+            terminal.mouse(0, 47, 10, release=True)
+            terminal.send("M")
+            terminal.wait(lambda: b"\x1b[?1002l" in terminal.raw, "mouse capture disabled")
+            terminal.send("M")
+            terminal.mouse(65, 12, 5)
             terminal.send("\t]]]]")
             terminal.wait(lambda: any(p.endswith("artifacts/list") for p, _ in fixtures[0].events), "artifact tab")
             output = root / "downloaded.txt"
@@ -215,13 +262,18 @@ def main():
             terminal.send("\x1b[Zr")
             terminal.send("tj\r")
             terminal.wait(lambda: any(p.endswith("runs/search") for p, _ in fixtures[1].events), "target switch during refresh")
+            # Full overlay/back makes the selected rows repaint. The renderer
+            # may otherwise emit only 'two' when replacing 'one-run-*', which
+            # is not a complete screen snapshot in this raw-output harness.
+            terminal.send("?")
+            terminal.send("\x1b")
             terminal.wait(lambda: "two-run" in terminal.text(), "second target visible")
             terminal.send("q")
             terminal.process.wait(8)
             assert terminal.process.returncode == 0, terminal.text()[-1500:]
             terminal.close()
             terminal = None
-            print("PASS PTY: arrows/Vim, literal input, filters, comparison/history, artifact download, target switch, resizing, clean terminal exit")
+            print("PASS PTY: arrows/Vim, mouse click/wheel/drag, literal input, columns/grouping persistence, filters, comparison/history, artifacts, targets, resize/zoom, terminal cleanup")
     finally:
         if terminal:
             terminal.close()

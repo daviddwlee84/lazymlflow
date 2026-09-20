@@ -30,7 +30,7 @@ def main():
         env = {k: v for k, v in os.environ.items()
                if not k.startswith(("MLFLOW_TRACKING", "MLFLOW_REGISTRY", "LAZYMLFLOW_"))}
         env.update(XDG_CONFIG_HOME=str(root / "config"), XDG_CACHE_HOME=str(root / "cache"),
-                   XDG_STATE_HOME=str(root / "state"), NO_COLOR="1")
+                   XDG_STATE_HOME=str(root / "state"), XDG_DATA_HOME=str(root / "data"), NO_COLOR="1")
         config = root / "targets.toml"
         artifact = root / "seed"
         (artifact / "nested").mkdir(parents=True)

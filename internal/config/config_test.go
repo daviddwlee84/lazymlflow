@@ -285,3 +285,50 @@ func TestSavePreservesConfigSymlink(t *testing.T) {
 		t.Fatal(reread, err)
 	}
 }
+
+func TestSSHTargetValidationAndCommentPreservingSave(t *testing.T) {
+	for _, tc := range []struct {
+		host, uri string
+		valid     bool
+	}{
+		{"remote-lab", "http://127.0.0.1:8000", true},
+		{"user@remote-lab", "https://mlflow.internal/tracking", true},
+		{"[::1]", "http://127.0.0.1:8000", true},
+		{"-Fbad", "http://localhost:8000", false},
+		{"host -p 22", "http://localhost:8000", false},
+		{"host;command", "http://localhost:8000", false},
+		{"remote-lab", "./mlruns", false},
+		{"remote-lab", "sqlite:///mlflow.db", false},
+	} {
+		_, err := NormalizeTarget(core.Target{ID: "ssh", SSHHost: tc.host, TrackingURI: tc.uri}, "")
+		if (err == nil) != tc.valid {
+			t.Errorf("%q %q: err=%v", tc.host, tc.uri, err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := "# personal settings\n[[targets]]\nid = 'lab'\ntracking_uri = 'http://127.0.0.1:8000' # reached remotely\nssh_host = 'old-alias' # existing SSH policy\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Targets[0].SSHHost = "new-alias"
+	if err = c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"# personal settings", "# reached remotely", "# existing SSH policy", "new-alias"} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("lost %q: %s", want, b)
+		}
+	}
+	reloaded, err := Load(path)
+	if err != nil || reloaded.Targets[0].SSHHost != "new-alias" {
+		t.Fatal("SSH not persisted", err)
+	}
+}

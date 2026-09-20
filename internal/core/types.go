@@ -15,6 +15,7 @@ type Target struct {
 	ID                   string   `toml:"id" json:"id"`
 	Name                 string   `toml:"name,omitempty" json:"name,omitempty"`
 	TrackingURI          string   `toml:"tracking_uri" json:"tracking_uri"`
+	SSHHost              string   `toml:"ssh_host,omitempty" json:"ssh_host,omitempty"`
 	WebURL               string   `toml:"web_url,omitempty" json:"web_url,omitempty"`
 	WorkingDir           string   `toml:"working_dir,omitempty" json:"working_dir,omitempty"`
 	Python               string   `toml:"python,omitempty" json:"python,omitempty"`
@@ -108,8 +109,42 @@ type RunData struct {
 	Tags    []KeyValue `json:"tags"`
 }
 type Run struct {
-	Info RunInfo `json:"info"`
-	Data RunData `json:"data"`
+	Info    RunInfo    `json:"info"`
+	Data    RunData    `json:"data"`
+	Inputs  RunInputs  `json:"inputs,omitempty"`
+	Outputs RunOutputs `json:"outputs,omitempty"`
+}
+
+type Dataset struct {
+	Name       string `json:"name"`
+	Digest     string `json:"digest"`
+	SourceType string `json:"source_type,omitempty"`
+	Source     string `json:"source,omitempty"`
+	Schema     string `json:"schema,omitempty"`
+	Profile    string `json:"profile,omitempty"`
+}
+type DatasetInput struct {
+	Dataset Dataset    `json:"dataset"`
+	Tags    []KeyValue `json:"tags,omitempty"`
+}
+type RunInputs struct {
+	DatasetInputs []DatasetInput `json:"dataset_inputs,omitempty"`
+}
+type ModelOutput struct {
+	ModelID string `json:"model_id"`
+	Step    int64  `json:"step,omitempty"`
+}
+type RunOutputs struct {
+	ModelOutputs []ModelOutput `json:"model_outputs,omitempty"`
+}
+
+func (r Run) ParentID() string {
+	for _, t := range r.Data.Tags {
+		if t.Key == "mlflow.parentRunId" {
+			return t.Value
+		}
+	}
+	return ""
 }
 
 func (r Run) ID() string {

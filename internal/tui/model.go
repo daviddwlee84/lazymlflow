@@ -27,6 +27,8 @@ type Options struct {
 	Input            io.Reader
 	Output           io.Writer
 	ConfigPath       string
+	State            core.StateStore
+	Mouse            *bool
 }
 
 func Run(ctx context.Context, opts Options) error {
@@ -41,6 +43,11 @@ func Run(ctx context.Context, opts Options) error {
 		po = append(po, tea.WithOutput(opts.Output))
 	}
 	_, err := tea.NewProgram(m, po...).Run()
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer flushCancel()
+	if flushErr := m.writer.flush(flushCtx); flushErr != nil && err == nil {
+		err = fmt.Errorf("save local preferences: %w", flushErr)
+	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -57,7 +64,16 @@ type listState struct {
 }
 type runState struct {
 	listState
-	Rows []core.Run
+	Rows             []core.Run
+	View             core.ExperimentView
+	ViewRequested    bool
+	ViewRevision     uint64
+	LoadingAll       bool
+	FirstPagePending bool
+	SeenPageTokens   map[string]bool
+	RowsVersion      uint64
+	presentationKey  string
+	presentation     []core.RunRow
 }
 type artifactState struct {
 	listState
@@ -66,23 +82,26 @@ type artifactState struct {
 }
 type targetState struct {
 	listState
-	Experiments    []core.Experiment
-	Runs           map[string]*runState
-	Artifacts      map[string]*artifactState
-	Basket         map[string]core.Run
-	BasketOrder    []string
-	Session        *core.Session
-	Retiring       *core.Session
-	ConnectPending bool
-	ConnectGen     uint64
-	ConnectErr     string
-	Histories      map[string][]core.Metric
-	HistoryErrors  map[string]string
-	HistoryGen     uint64
-	HistoryPending bool
-	CompareGen     uint64
-	ComparePending bool
-	CompareErr     string
+	Visibility          map[string]core.Visibility
+	VisibilityTouched   map[string]bool
+	VisibilityRequested bool
+	Experiments         []core.Experiment
+	Runs                map[string]*runState
+	Artifacts           map[string]*artifactState
+	Basket              map[string]core.Run
+	BasketOrder         []string
+	Session             *core.Session
+	Retiring            *core.Session
+	ConnectPending      bool
+	ConnectGen          uint64
+	ConnectErr          string
+	Histories           map[string][]core.Metric
+	HistoryErrors       map[string]string
+	HistoryGen          uint64
+	HistoryPending      bool
+	CompareGen          uint64
+	ComparePending      bool
+	CompareErr          string
 }
 
 type model struct {
@@ -114,6 +133,19 @@ type model struct {
 	draftEdit                               bool
 	formPending                             bool
 	targetForm                              *targetform.Model
+	layout                                  core.LayoutPreferences
+	layoutRevision                          uint64
+	writer                                  *stateWriter
+	zoom, resizing                          bool
+	mousePressed                            string
+	mouseContext                            string
+	drag                                    string
+	dragX, dragWidth                        int
+	parentInfo                              *core.Run
+	parentChild                             string
+	parentGen                               uint64
+	pickerSearch                            textinput.Model
+	pickerTyping                            bool
 }
 
 func newModel(ctx context.Context, o Options) *model {
@@ -121,6 +153,13 @@ func newModel(ctx context.Context, o Options) *model {
 	i.CharLimit = 8192
 	i.Prompt = "> "
 	m := &model{ctx: ctx, opts: o, targets: append([]core.Target(nil), o.Targets...), active: o.InitialTarget, states: map[string]*targetState{}, cancel: map[string]context.CancelFunc{}, width: 100, height: 30, input: i, artifactPath: map[string]string{}, metricColumns: append([]string(nil), o.MetricColumns...), paramColumns: append([]string(nil), o.ParameterColumns...)}
+	m.layout = core.DefaultLayout()
+	m.writer = newStateWriter()
+	m.pickerSearch = textinput.New()
+	m.pickerSearch.Prompt = "Search: "
+	if o.Mouse != nil {
+		m.layout.Mouse = *o.Mouse
+	}
 	if m.active == "" && len(m.targets) > 0 {
 		m.active = m.targets[0].ID
 	}
@@ -133,9 +172,11 @@ func newModel(ctx context.Context, o Options) *model {
 	return m
 }
 func newTargetState() *targetState {
-	return &targetState{Runs: map[string]*runState{}, Artifacts: map[string]*artifactState{}, Basket: map[string]core.Run{}, Histories: map[string][]core.Metric{}, HistoryErrors: map[string]string{}}
+	return &targetState{Visibility: map[string]core.Visibility{}, VisibilityTouched: map[string]bool{}, Runs: map[string]*runState{}, Artifacts: map[string]*artifactState{}, Basket: map[string]core.Run{}, Histories: map[string][]core.Metric{}, HistoryErrors: map[string]string{}}
 }
-func (m *model) Init() tea.Cmd { return tea.Batch(m.connect(), m.tick()) }
+func (m *model) Init() tea.Cmd {
+	return tea.Batch(m.connect(), m.tick(), m.loadLayout(), m.loadVisibility())
+}
 func (m *model) tick() tea.Cmd {
 	if m.opts.RefreshSeconds <= 0 {
 		return nil
@@ -226,6 +267,8 @@ func (m *model) stopAll() {
 		for _, r := range s.Runs {
 			r.Gen = m.seq
 			r.Pending = false
+			r.FirstPagePending = false
+			r.LoadingAll = false
 		}
 		for _, a := range s.Artifacts {
 			if a.Pending {
@@ -239,8 +282,39 @@ func (m *model) stopAll() {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	defer m.refreshRowCache()
 	switch v := msg.(type) {
+	case layoutLoadedMsg:
+		before := m.selectedExperiment()
+		if v.err != nil {
+			m.status = "Could not load layout: " + v.err.Error()
+		} else if v.found && v.revision == m.layoutRevision {
+			m.layout = v.value
+			m.reselectExperiment()
+			if m.opts.Mouse != nil {
+				m.layout.Mouse = *m.opts.Mouse
+			}
+		}
+		if before != m.selectedExperiment() {
+			return m, m.loadRuns(false)
+		}
+		return m, nil
+	case viewLoadedMsg:
+		return m, m.acceptView(v)
+	case visibilityLoadedMsg:
+		return m, m.acceptVisibility(v)
+	case preferencesSavedMsg:
+		if v.err != nil {
+			m.status = "Preferences not saved: " + v.err.Error()
+		}
+		return m, nil
+	case parentLoadedMsg:
+		return m, m.acceptParent(v)
+	case tea.MouseClickMsg, tea.MouseReleaseMsg, tea.MouseMotionMsg, tea.MouseWheelMsg:
+		return m, m.handleMouse(msg)
 	case tea.WindowSizeMsg:
+		m.mousePressed = ""
+		m.drag = ""
 		m.width = max(1, v.Width)
 		m.height = max(1, v.Height)
 		m.input.SetWidth(max(1, m.width-8))
@@ -295,6 +369,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case savedMsg:
 		return m, m.acceptSaved(v)
 	case tea.KeyPressMsg:
+		m.mousePressed = ""
+		m.drag = ""
 		if m.targetForm != nil {
 			return m, m.updateTargetForm(msg)
 		}
@@ -310,7 +386,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleInput(msg, key)
 		}
 		if m.overlay != "" {
+			if m.isPicker() {
+				return m, m.handlePicker(msg, key)
+			}
 			return m, m.handleOverlay(key)
+		}
+		if m.resizing {
+			return m, m.resizeKey(key)
 		}
 		if key == "g" {
 			if m.prefix {
@@ -335,6 +417,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.targetForm != nil {
 		return m, m.updateTargetForm(msg)
 	}
+	if m.isPicker() && m.pickerTyping {
+		var cmd tea.Cmd
+		m.pickerSearch, cmd = m.pickerSearch.Update(msg)
+		m.menuIndex = 0
+		return m, cmd
+	}
 	if m.inputMode != "" {
 		before := m.input.Value()
 		var cmd tea.Cmd
@@ -356,15 +444,31 @@ type action struct {
 func act(id, keys, label string) action { return action{id, strings.Split(keys, "|"), label} }
 func (m *model) actions() []action {
 	a := []action{act("quit", "q", "Quit"), act("help", "?", "Help"), act("palette", ":", "Actions"), act("targets", "t", "Switch target"), act("refresh", "r", "Refresh"), act("up", "up|k", "Move up"), act("down", "down|j", "Move down"), act("first", "home", "First row (also gg)"), act("last", "end|G", "Last row"), act("back", "esc", "Back / cancel"), act("nextpane", "tab", "Next pane"), act("prevpane", "shift+tab", "Previous pane"), act("left", "left|h", "Previous pane / parent / pan left"), act("right", "right|l", "Next pane / enter / pan right"), act("enter", "enter", "Inspect selection")}
+	a = append(a, act("pane1", "1", "Focus experiments"), act("pane2", "2", "Focus runs"), act("pane3", "3", "Focus details"), act("zoom", "z", "Zoom / restore pane"), act("resize", "ctrl+w", "Resize panes"), act("mouse", "M", "Toggle mouse capture"), act("layout", "L", "Layout options"))
+	if m.focus == 0 {
+		a = append(a, act("info", "i", "Full experiment information"))
+	}
 	if m.compare {
 		a = append(a, act("compare", "c", "Close comparison"), act("diff", "x", "Only differences"), act("history", "m", "Choose history metric"), act("chart", "v", "Toggle table / history chart"), act("axis", "a", "Toggle step / elapsed time"))
 		return a
 	}
 	if m.focus < 2 {
-		a = append(a, act("local", "/", "Search loaded rows"), act("filter", "f", "MLflow server filter"), act("sort", "s", "Server sort order"), act("more", "n", "Load next page"))
+		a = append(a, act("local", "/", "Search loaded rows"), act("filter", "f", "MLflow server filter"), act("sort", "s", "Sort order"), act("more", "n", "Load next page"))
 	}
 	if m.focus == 1 {
-		a = append(a, act("basket", "space", "Select run for comparison"), act("columns", "v", "Metric / parameter columns"), act("previous-column", "[", "Previous metric / parameter column"), act("next-column", "]", "Next metric / parameter column"))
+		a = append(a, act("basket", "space", "Select run for comparison"), act("columns", "v", "Choose columns"), act("previous-column", "[", "Previous metric / parameter column"), act("next-column", "]", "Next metric / parameter column"))
+	}
+	if m.focus == 1 {
+		a = append(a, act("group", "b", "Group runs"), act("loadall", "A", "Load all matching runs"), act("parent", "P", "Inspect parent run"))
+	}
+	if m.focus < 2 {
+		a = append(a, act("visibility", "V", "Local visibility filter"))
+	}
+	if (m.focus == 0 && m.state() != nil && m.state().Selected != "") || (m.focus != 0 && m.run() != nil) {
+		a = append(a, act("hide", "H", "Hide locally"), act("archive", "X", "Archive locally"), act("restore", "U", "Restore local visibility"))
+	}
+	if r := m.runs(); r != nil && r.LoadingAll {
+		a = append(a, act("cancel-all", "ctrl+x", "Cancel loading all"))
 	}
 	if s := m.state(); s != nil && len(s.Basket) > 0 {
 		a = append(a, act("compare", "c", fmt.Sprintf("Compare %d selected runs", len(s.Basket))))
@@ -389,6 +493,62 @@ func (m *model) actions() []action {
 
 func (m *model) perform(id string) tea.Cmd {
 	switch id {
+	case "pane1", "pane2", "pane3":
+		m.focus = int(id[len(id)-1] - '1')
+		m.mousePressed = ""
+		return m.ensureDetails()
+	case "zoom":
+		m.zoom = !m.zoom
+		m.mousePressed = ""
+	case "resize":
+		m.resizing = true
+		m.layoutRevision++
+		m.status = "Resize: h/l left pane · k/j top pane · 0 reset · Enter/Esc finish"
+	case "mouse":
+		m.layout.Mouse = !m.layout.Mouse
+		m.mousePressed = ""
+		return m.saveLayout()
+	case "layout", "group", "visibility", "info":
+		return m.openPicker(id)
+	case "hide":
+		return m.setVisibility(core.VisibilityHidden)
+	case "archive":
+		return m.setVisibility(core.VisibilityArchived)
+	case "restore":
+		return m.setVisibility(core.VisibilityNormal)
+	case "loadall":
+		if r := m.runs(); r != nil {
+			if r.Pending {
+				m.status = "Runs are updating; wait for this page before loading all"
+				return nil
+			}
+			if r.Err != "" {
+				m.status = "Paging stopped after an error; press r to refresh the query"
+				return nil
+			}
+			r.LoadingAll = true
+			m.status = "Loading all matching runs · Ctrl+X cancels"
+			if len(r.Rows) == 0 && r.Next == "" {
+				cmd := m.loadRuns(false)
+				r.LoadingAll = true
+				return cmd
+			}
+			return m.loadRuns(true)
+		}
+	case "cancel-all":
+		if c := m.cancel["runs"]; c != nil {
+			c()
+		}
+		if r := m.runs(); r != nil {
+			m.seq++
+			r.Gen = m.seq
+			r.Pending = false
+			r.FirstPagePending = false
+			r.LoadingAll = false
+		}
+		m.status = "Loading all cancelled; loaded rows retained"
+	case "parent":
+		return m.loadParent()
 	case "quit":
 		m.stopAll()
 		return tea.Quit
@@ -429,6 +589,9 @@ func (m *model) perform(id string) tea.Cmd {
 			m.comparePan = max(0, m.comparePan+d)
 			return nil
 		}
+		if m.focus == 1 && m.treeNavigation(d) {
+			return m.saveView()
+		}
 		if m.focus == 2 {
 			if m.tab == 4 {
 				if d < 0 {
@@ -436,7 +599,7 @@ func (m *model) perform(id string) tea.Cmd {
 				}
 				return m.artifactEnter()
 			}
-			m.tab = (m.tab + d + 5) % 5
+			m.tab = (m.tab + d + 6) % 6
 			m.detailOffset = 0
 			return m.ensureDetails()
 		}
@@ -448,6 +611,12 @@ func (m *model) perform(id string) tea.Cmd {
 			return m.loadRuns(false)
 		}
 		if m.focus == 1 {
+			if row := m.selectedRunRow(); row != nil && row.Expandable {
+				return m.toggleRow(*row)
+			}
+			if m.run() == nil {
+				return nil
+			}
 			m.focus = 2
 			return m.ensureDetails()
 		}
@@ -464,6 +633,9 @@ func (m *model) perform(id string) tea.Cmd {
 			s.ConnectPending = false
 			m.status = "Connection cancelled. Press r to retry."
 			return nil
+		}
+		if r := m.runs(); r != nil && r.LoadingAll {
+			return m.perform("cancel-all")
 		}
 		if m.downloadPending {
 			return m.perform("cancel-download")
@@ -498,6 +670,9 @@ func (m *model) perform(id string) tea.Cmd {
 		}
 		return m.startInput("filter", "MLflow filter (submitted to server)", value)
 	case "sort":
+		if m.focus == 1 {
+			return m.openPicker("sort")
+		}
 		value := "name ASC"
 		if m.focus == 0 {
 			if s := m.state(); s != nil && s.Order != "" {
@@ -508,18 +683,11 @@ func (m *model) perform(id string) tea.Cmd {
 		}
 		return m.startInput("sort", "Server order: attributes.start_time DESC, metrics.loss ASC", value)
 	case "columns":
-		var cols []string
-		for _, c := range m.metricColumns {
-			cols = append(cols, "metric:"+c)
-		}
-		for _, c := range m.paramColumns {
-			cols = append(cols, "param:"+c)
-		}
-		return m.startInput("columns", "Columns, comma separated: metric:loss,param:learning_rate", strings.Join(cols, ","))
+		return m.openPicker("columns")
 	case "previous-column":
 		m.columnPan = max(0, m.columnPan-1)
 	case "next-column":
-		m.columnPan = clamp(m.columnPan+1, 0, len(m.metricColumns)+len(m.paramColumns)-1)
+		m.columnPan = clamp(m.columnPan+1, 0, len(m.viewColumns())-2)
 	case "more":
 		if m.focus == 0 {
 			return m.loadExperiments(true)
@@ -571,11 +739,11 @@ func (m *model) perform(id string) tea.Cmd {
 	case "axis":
 		m.elapsed = !m.elapsed
 	case "prevtab":
-		m.tab = (m.tab + 4) % 5
+		m.tab = (m.tab + 5) % 6
 		m.detailOffset = 0
 		return m.ensureDetails()
 	case "nexttab":
-		m.tab = (m.tab + 1) % 5
+		m.tab = (m.tab + 1) % 6
 		m.detailOffset = 0
 		return m.ensureDetails()
 	case "open":
@@ -639,7 +807,7 @@ func (m *model) handleInput(msg tea.Msg, key string) tea.Cmd {
 				} else {
 					r.Order = value
 				}
-				return m.loadRuns(false)
+				return tea.Batch(m.saveView(), m.loadRuns(false))
 			}
 		case "columns":
 			var metrics, params []string
@@ -707,7 +875,7 @@ func (m *model) experimentsVisible() []core.Experiment {
 	var out []core.Experiment
 	q := strings.ToLower(s.Local)
 	for _, e := range s.Experiments {
-		if strings.Contains(strings.ToLower(e.Name+" "+e.ID), q) {
+		if visibilityMatches(m.layout.ExperimentVisibility, s.Visibility[core.VisibilityKey("experiment", e.ID)]) && strings.Contains(strings.ToLower(e.Name+" "+e.ID), q) {
 			out = append(out, e)
 		}
 	}
@@ -721,7 +889,7 @@ func (m *model) runsVisible() []core.Run {
 	var out []core.Run
 	q := strings.ToLower(r.Local)
 	for _, v := range r.Rows {
-		if strings.Contains(strings.ToLower(v.Name()+" "+v.ID()+" "+v.Info.Status), q) {
+		if visibilityMatches(r.View.Visibility, m.state().Visibility[core.VisibilityKey("run", v.ID())]) && strings.Contains(strings.ToLower(v.Name()+" "+v.ID()+" "+v.Info.Status), q) {
 			out = append(out, v)
 		}
 	}
@@ -738,13 +906,14 @@ func (m *model) selectExperiment(index int) {
 	if len(rows) > 0 {
 		s.Selected = rows[s.Index].ID
 		if s.Runs[s.Selected] == nil {
-			s.Runs[s.Selected] = &runState{listState: listState{Order: "attributes.start_time DESC"}}
+			s.Runs[s.Selected] = &runState{listState: listState{Order: "attributes.start_time DESC"}, View: core.DefaultView(m.metricColumns, m.paramColumns)}
 		}
 	}
 }
 func (m *model) selectRun(index int) {
+	m.refreshRowCache()
 	s := m.runs()
-	rows := m.runsVisible()
+	rows := m.runRows()
 	if s == nil {
 		return
 	}
@@ -752,7 +921,7 @@ func (m *model) selectRun(index int) {
 	s.Index = clamp(index, 0, len(rows)-1)
 	s.Selected = ""
 	if len(rows) > 0 {
-		s.Selected = rows[s.Index].ID()
+		s.Selected = rows[s.Index].ID
 	}
 	if s.Selected != previous {
 		m.chart = false
@@ -796,6 +965,8 @@ func (m *model) move(delta int) tea.Cmd {
 					count = len(r.Data.Params)
 				case 3:
 					count = len(r.Data.Tags)
+				case 5:
+					count = len(r.Inputs.DatasetInputs) * 5
 				}
 			}
 			m.detailOffset = clamp(m.detailOffset+delta, 0, max(0, count-1))

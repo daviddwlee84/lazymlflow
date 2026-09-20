@@ -120,7 +120,7 @@ func (m *model) acceptConnected(v connectedMsg) tea.Cmd {
 	s.Session = v.session
 	s.Retiring = nil
 	s.ConnectErr = ""
-	return m.loadExperiments(false)
+	return tea.Batch(m.loadExperiments(false), m.loadVisibility())
 }
 func (m *model) refresh() tea.Cmd {
 	s := m.state()
@@ -202,14 +202,24 @@ func (m *model) acceptExperiments(v experimentsMsg) tea.Cmd {
 		}
 	}
 	m.selectExperiment(index)
-	return m.loadRuns(false)
+	return tea.Batch(m.loadRuns(false), m.loadView())
 }
 func (m *model) loadRuns(more bool) tea.Cmd {
 	s, r := m.state(), m.runs()
 	if s == nil || s.Session == nil || s.Selected == "" || r == nil {
 		return nil
 	}
+	if more && r.Pending {
+		m.status = "Runs are updating; wait for this page before requesting another"
+		return nil
+	}
+	if more && r.Err != "" {
+		r.LoadingAll = false
+		m.status = "Paging stopped after an error; press r to refresh the query"
+		return nil
+	}
 	if more && r.Next == "" {
+		r.LoadingAll = false
 		m.status = "All runs are loaded"
 		return nil
 	}
@@ -220,12 +230,27 @@ func (m *model) loadRuns(more bool) tea.Cmd {
 	r.Gen = g
 	r.Pending = true
 	r.Err = ""
+	if !more {
+		r.LoadingAll = false
+		r.Next = ""
+		r.SeenPageTokens = map[string]bool{}
+	}
+	r.FirstPagePending = !more
 	q := core.RunQuery{ExperimentIDs: []string{s.Selected}, Filter: r.Filter, OrderBy: splitOrder(r.Order), MaxResults: 100, ViewType: "ACTIVE_ONLY"}
 	if more {
 		q.PageToken = r.Next
+		if r.SeenPageTokens == nil {
+			r.SeenPageTokens = map[string]bool{}
+		}
+		r.SeenPageTokens[q.PageToken] = true
 	}
 	b, t, e := s.Session.Backend, m.active, s.Selected
-	return func() tea.Msg { p, err := b.SearchRuns(ctx, q); return runsMsg{t, e, g, p, more, err} }
+	fetch := func() tea.Msg { p, err := b.SearchRuns(ctx, q); return runsMsg{t, e, g, p, more, err} }
+	prefs := m.loadView()
+	if prefs != nil {
+		return tea.Batch(fetch, prefs)
+	}
+	return fetch
 }
 func (m *model) acceptRuns(v runsMsg) tea.Cmd {
 	s := m.states[v.target]
@@ -237,10 +262,13 @@ func (m *model) acceptRuns(v runsMsg) tea.Cmd {
 		return nil
 	}
 	r.Pending = false
+	r.FirstPagePending = false
 	if v.err != nil {
 		r.Err = v.err.Error()
+		r.LoadingAll = false
 		return nil
 	}
+	r.RowsVersion++
 	selected, index := r.Selected, r.Index
 	if v.append {
 		seen := map[string]bool{}
@@ -250,6 +278,7 @@ func (m *model) acceptRuns(v runsMsg) tea.Cmd {
 		for _, run := range v.page.Runs {
 			if !seen[run.ID()] {
 				r.Rows = append(r.Rows, run)
+				seen[run.ID()] = true
 			}
 		}
 	} else {
@@ -257,8 +286,20 @@ func (m *model) acceptRuns(v runsMsg) tea.Cmd {
 	}
 	r.Next = v.page.NextPageToken
 	r.Err = ""
-	for i, run := range m.runsVisible() {
-		if run.ID() == selected {
+	if r.Next != "" {
+		if r.SeenPageTokens == nil {
+			r.SeenPageTokens = map[string]bool{}
+		}
+		if r.SeenPageTokens[r.Next] {
+			r.Next = ""
+			r.LoadingAll = false
+			r.Err = "Pagination stopped: server repeated a page token; loaded rows retained. Press r to refresh."
+		} else {
+			r.SeenPageTokens[r.Next] = true
+		}
+	}
+	for i, run := range m.runRows() {
+		if run.ID == selected {
 			index = i
 			break
 		}
@@ -269,7 +310,15 @@ func (m *model) acceptRuns(v runsMsg) tea.Cmd {
 			s.Basket[run.ID()] = run
 		}
 	}
-	return m.ensureDetails()
+	details := m.ensureDetails()
+	if r.LoadingAll {
+		if r.Next != "" {
+			return tea.Batch(details, m.loadRuns(true))
+		}
+		r.LoadingAll = false
+		m.status = fmt.Sprintf("All %d matching runs loaded", len(r.Rows))
+	}
+	return details
 }
 func (m *model) loadArtifacts() tea.Cmd {
 	s, r, a := m.state(), m.run(), m.artifacts()
@@ -557,13 +606,24 @@ func (m *model) acceptDownload(v downloadedMsg) tea.Cmd {
 	return nil
 }
 func splitOrder(s string) []string {
-	var a []string
-	for _, v := range strings.Split(s, ",") {
-		if v = strings.TrimSpace(v); v != "" {
-			a = append(a, v)
+	var result []string
+	start := 0
+	quoted := false
+	for i, r := range s {
+		if r == '`' {
+			quoted = !quoted
+		}
+		if r == ',' && !quoted {
+			if v := strings.TrimSpace(s[start:i]); v != "" {
+				result = append(result, v)
+			}
+			start = i + 1
 		}
 	}
-	return a
+	if v := strings.TrimSpace(s[start:]); v != "" {
+		result = append(result, v)
+	}
+	return result
 }
 
 func (m *model) handleOverlay(key string) tea.Cmd {
@@ -637,7 +697,7 @@ func (m *model) handleOverlay(key string) tea.Cmd {
 			m.chart = false
 			m.detailOffset = 0
 			m.focus = 0
-			return m.connect()
+			return tea.Batch(m.connect(), m.loadVisibility())
 		case "metrics":
 			keys := m.metricKeys()
 			if len(keys) == 0 {
@@ -664,10 +724,35 @@ func (m *model) startTargetForm(draft core.Target, editing bool) tea.Cmd {
 		configPath = config.DefaultPath()
 	}
 	m.targetForm = targetform.New(draft, configPath, editing)
-	m.targetForm.Update(tea.WindowSizeMsg{Width: m.width - 2, Height: m.height - 6})
+	m.targetForm.Update(m.targetFormSize())
 	return m.targetForm.Init()
 }
+func (m *model) targetFormSize() tea.WindowSizeMsg {
+	return tea.WindowSizeMsg{Width: max(1, m.width-2), Height: max(1, m.geometry().Content.H-2)}
+}
 func (m *model) updateTargetForm(msg tea.Msg) tea.Cmd {
+	// The shared form renders inside the dashboard frame at (1,2). Its hit
+	// rectangles use coordinates local to that same inner content area.
+	switch v := msg.(type) {
+	case tea.WindowSizeMsg:
+		msg = m.targetFormSize()
+	case tea.MouseClickMsg:
+		v.X--
+		v.Y -= 2
+		msg = v
+	case tea.MouseReleaseMsg:
+		v.X--
+		v.Y -= 2
+		msg = v
+	case tea.MouseMotionMsg:
+		v.X--
+		v.Y -= 2
+		msg = v
+	case tea.MouseWheelMsg:
+		v.X--
+		v.Y -= 2
+		msg = v
+	}
 	var cmd tea.Cmd
 	m.targetForm, cmd = m.targetForm.Update(msg)
 	if m.targetForm.Cancelled {

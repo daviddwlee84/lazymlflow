@@ -195,3 +195,20 @@ func TestDirectArtifactCLIStaging(t *testing.T) {
 		t.Fatal(r, err)
 	}
 }
+
+func TestSSHArtifactOriginTranslation(t *testing.T) {
+	c := New("http://127.0.0.1:18000/prefix", Options{OriginalTrackingURI: "https://tracking.internal:8443/prefix"})
+	for _, test := range []struct{ uri, want string }{
+		{"mlflow-artifacts:/1/run/artifacts", "http://127.0.0.1:18000/prefix/api/2.0/mlflow-artifacts/artifacts/1/run/artifacts"},
+		{"mlflow-artifacts://tracking.internal:8443/1/run/artifacts", "http://127.0.0.1:18000/prefix/api/2.0/mlflow-artifacts/artifacts/1/run/artifacts"},
+		{"https://tracking.internal:8443/prefix/api/2.0/mlflow-artifacts/artifacts/1/run/artifacts", "http://127.0.0.1:18000/prefix/api/2.0/mlflow-artifacts/artifacts/1/run/artifacts"},
+		{"https://tracking.internal:8443/unrelated/artifacts", "https://tracking.internal:8443/unrelated/artifacts"},
+		{"https://other.internal/prefix/artifacts", "https://other.internal/prefix/artifacts"},
+		{"mlflow-artifacts://other.internal:8443/1/run/artifacts", "https://other.internal:8443/prefix/api/2.0/mlflow-artifacts/artifacts/1/run/artifacts"},
+	} {
+		got, proxy, err := c.proxyURI(test.uri)
+		if err != nil || !proxy || got != test.want {
+			t.Fatalf("%s: got %q want %q (%v)", test.uri, got, test.want, err)
+		}
+	}
+}

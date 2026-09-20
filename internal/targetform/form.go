@@ -27,7 +27,8 @@ type Model struct {
 	fields                                []textinput.Model
 	focus                                 int
 	generation                            uint64
-	width                                 int
+	width, height                         int
+	mousePressed                          string
 }
 type validatedMsg struct {
 	owner      *Model
@@ -36,18 +37,18 @@ type validatedMsg struct {
 	err        error
 }
 
-var labels = []string{"ID", "Display name (optional)", "Tracking URI", "Python / virtual environment (optional)", "Managed MLflow version (optional)", "Original working directory (optional)", "Artifact destination (optional)", "Browser URL (optional)", "Bearer token environment variable (optional)", "Username environment variable (optional)", "Password environment variable (optional)", "Custom CA file (optional)", "Extra Python packages (comma separated)", "Child environment references (NAME=SOURCE, comma separated)"}
+var labels = []string{"ID", "Display name (optional)", "Tracking URI", "Python / virtual environment (optional)", "Managed MLflow version (optional)", "Original working directory (optional)", "Artifact destination (optional)", "Browser URL (optional)", "Bearer token environment variable (optional)", "Username environment variable (optional)", "Password environment variable (optional)", "Custom CA file (optional)", "Extra Python packages (comma separated)", "Child environment references (NAME=SOURCE, comma separated)", "SSH host alias (optional; URI is reached from that host)"}
 
 const basicFields = 5
 
 func New(initial core.Target, configPath string, editing bool) *Model {
-	m := &Model{Target: initial, path: configPath, editing: editing, width: 80}
+	m := &Model{Target: initial, path: configPath, editing: editing, width: 80, height: 24}
 	var env []string
 	for k, v := range initial.Env {
 		env = append(env, k+"="+v)
 	}
 	sort.Strings(env)
-	values := []string{initial.ID, initial.Name, initial.TrackingURI, initial.Python, initial.MLflowVersion, initial.WorkingDir, initial.ArtifactsDestination, initial.WebURL, initial.TokenEnv, initial.UsernameEnv, initial.PasswordEnv, initial.CAFile, strings.Join(initial.ExtraPackages, ","), strings.Join(env, ",")}
+	values := []string{initial.ID, initial.Name, initial.TrackingURI, initial.Python, initial.MLflowVersion, initial.WorkingDir, initial.ArtifactsDestination, initial.WebURL, initial.TokenEnv, initial.UsernameEnv, initial.PasswordEnv, initial.CAFile, strings.Join(initial.ExtraPackages, ","), strings.Join(env, ","), initial.SSHHost}
 	for i, value := range values {
 		field := textinput.New()
 		field.Prompt = "> "
@@ -83,6 +84,8 @@ func (m *Model) Update(msg tea.Msg) (*Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = max(1, v.Width)
+		m.height = max(1, v.Height)
+		m.mousePressed = ""
 		for i := range m.fields {
 			m.fields[i].SetWidth(max(1, min(100, m.width-8)))
 		}
@@ -92,6 +95,7 @@ func (m *Model) Update(msg tea.Msg) (*Model, tea.Cmd) {
 			return m, nil
 		}
 		m.validating = false
+		m.mousePressed = ""
 		if v.err != nil {
 			m.Err = v.err
 			return m, m.fields[m.focus].Focus()
@@ -100,7 +104,24 @@ func (m *Model) Update(msg tea.Msg) (*Model, tea.Cmd) {
 		m.Err = nil
 		m.review = true
 		return m, nil
+	case tea.MouseClickMsg:
+		m.mousePressed = ""
+		if v.Button == tea.MouseLeft && !m.validating {
+			m.mousePressed = m.hitAt(v.X, v.Y)
+		}
+		return m, nil
+	case tea.MouseReleaseMsg:
+		pressed := m.mousePressed
+		m.mousePressed = ""
+		if v.Button != tea.MouseLeft || pressed == "" || pressed != m.hitAt(v.X, v.Y) || m.validating {
+			return m, nil
+		}
+		return m, m.activateMouse(pressed)
+	case tea.MouseWheelMsg:
+		m.mousePressed = ""
+		return m, nil
 	case tea.KeyPressMsg:
+		m.mousePressed = ""
 		key := v.String()
 		if key == "ctrl+c" {
 			m.Cancelled = true
@@ -187,6 +208,7 @@ func (m *Model) validate() tea.Cmd {
 		draft.UsernameEnv = values[9]
 		draft.PasswordEnv = values[10]
 		draft.CAFile = values[11]
+		draft.SSHHost = values[14]
 		draft.ExtraPackages = nil
 		for _, p := range strings.Split(values[12], ",") {
 			if p = strings.TrimSpace(p); p != "" {
@@ -226,15 +248,21 @@ func (m *Model) Reject(err error) tea.Cmd {
 	return m.fields[m.focus].Focus()
 }
 
-func (m *Model) View(width, height int) string {
+// content derives paint and hit geometry together without changing model state.
+func (m *Model) content(width, height int) ([]string, []formHit) {
 	if m.Done || m.Cancelled {
-		return ""
+		return nil, nil
 	}
 	width = max(1, width)
 	height = max(1, height)
 	var lines []string
+	var hits []formHit
+	footerY := -1
 	if m.review {
 		lines = []string{"Review tracking target", "Save to: " + safe(m.path), "ID: " + safe(m.Target.ID), "Name: " + safe(m.Target.Label()), "Tracking URI: " + safe(config.RedactURI(m.Target.TrackingURI))}
+		if m.Target.SSHHost != "" {
+			lines = append(lines, "SSH host: "+safe(m.Target.SSHHost)+" (tracking URI reached remotely)")
+		}
 		if m.Target.Python != "" {
 			lines = append(lines, "Existing Python / venv: "+safe(m.Target.Python))
 		} else {
@@ -276,6 +304,7 @@ func (m *Model) View(width, height int) string {
 			if i == m.focus {
 				marker = "> "
 			}
+			hits = append(hits, formHit{ID: fmt.Sprintf("field:%d", i), X: 0, Y: len(lines), W: width, H: 2})
 			lines = append(lines, marker+labels[i], m.fields[i].View())
 		}
 		if m.validating {
@@ -286,9 +315,11 @@ func (m *Model) View(width, height int) string {
 		}
 		lines = append(lines, fmt.Sprintf("Field %d/%d · Tab/Enter next · Shift+Tab previous", m.focus+1, m.count()), "Ctrl+O basic/advanced · Esc cancel")
 	}
+	footerY = len(lines) - 1
 	if len(lines) > height {
 		if m.review {
 			lines = append(lines[:max(0, height-1)], "Enter save · Esc edit")
+			footerY = len(lines) - 1
 		} else {
 			lines = lines[:height]
 		}
@@ -296,7 +327,66 @@ func (m *Model) View(width, height int) string {
 	for i, line := range lines {
 		lines[i] = ansi.Truncate(line, width, "…")
 	}
+	if footerY >= 0 && footerY < len(lines) {
+		actions := []struct{ text, id string }{}
+		if m.review {
+			actions = []struct{ text, id string }{{"Enter save", "save"}, {"Esc edit", "edit"}, {"Ctrl+C cancel", "cancel"}}
+		} else if !m.validating {
+			actions = []struct{ text, id string }{{"Ctrl+O basic/advanced", "advanced"}, {"Esc cancel", "cancel"}}
+		}
+		line := lines[footerY]
+		for _, action := range actions {
+			if x := strings.Index(line, action.text); x >= 0 {
+				hits = append(hits, formHit{ID: action.id, X: ansi.StringWidth(line[:x]), Y: footerY, W: ansi.StringWidth(action.text), H: 1})
+			}
+		}
+	}
+	return lines, hits
+}
+
+func (m *Model) View(width, height int) string {
+	lines, _ := m.content(width, height)
 	return strings.Join(lines, "\n")
+}
+
+type formHit struct {
+	ID         string
+	X, Y, W, H int
+}
+
+func (m *Model) hitAt(x, y int) string {
+	_, hits := m.content(m.width, m.height)
+	for _, hit := range hits {
+		if x >= hit.X && x < min(hit.X+hit.W, m.width) && y >= hit.Y && y < min(hit.Y+hit.H, m.height) {
+			return hit.ID
+		}
+	}
+	return ""
+}
+func (m *Model) activateMouse(id string) tea.Cmd {
+	switch id {
+	case "save":
+		if m.review {
+			m.Done = true
+		}
+	case "edit":
+		m.review = false
+		return m.fields[m.focus].Focus()
+	case "cancel":
+		m.Cancelled = true
+		m.generation++
+	case "advanced":
+		_, cmd := m.Update(tea.KeyPressMsg{Code: 'o', Mod: tea.ModCtrl})
+		return cmd
+	default:
+		var field int
+		if _, err := fmt.Sscanf(id, "field:%d", &field); err == nil && field >= 0 && field < m.count() && (!m.editing || field != 0) {
+			m.fields[m.focus].Blur()
+			m.focus = field
+			return m.fields[m.focus].Focus()
+		}
+	}
+	return nil
 }
 func safe(value string) string {
 	return strings.Map(func(r rune) rune {

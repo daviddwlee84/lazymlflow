@@ -9,6 +9,7 @@ import (
 
 	"github.com/daviddwlee84/lazymlflow/internal/config"
 	"github.com/daviddwlee84/lazymlflow/internal/core"
+	"github.com/daviddwlee84/lazymlflow/internal/localstate"
 	"github.com/daviddwlee84/lazymlflow/internal/platform"
 	"github.com/spf13/cobra"
 )
@@ -76,7 +77,7 @@ func (a *app) artifactsCommand() *cobra.Command {
 func (a *app) openCommand() *cobra.Command {
 	var experiment string
 	var printOnly bool
-	cmd := &cobra.Command{Use: "open [RUN_ID]", Short: "Open the tracking UI, an experiment, or a run", Args: rangeArgs(0, 1), Long: "Open the selected resource in a web browser. A local tracking server stays alive\nuntil Ctrl+C; remote endpoints return immediately. --print is available for remote targets.", RunE: func(cmd *cobra.Command, args []string) error {
+	cmd := &cobra.Command{Use: "open [RUN_ID]", Short: "Open the tracking UI, an experiment, or a run", Args: rangeArgs(0, 1), Long: "Open the selected resource in a web browser. A managed local server or SSH tunnel\nstays alive until Ctrl+C; direct remote endpoints return immediately.\n--print is available only for direct remote targets.", RunE: func(cmd *cobra.Command, args []string) error {
 		if a.jsonOutput && !printOnly {
 			return usagef("open --json requires --print and a remote target")
 		}
@@ -89,8 +90,8 @@ func (a *app) openCommand() *cobra.Command {
 			return usageError{err}
 		}
 		remote := uri.Scheme == "http" || uri.Scheme == "https"
-		if printOnly && !remote {
-			return usagef("--print requires a remote target; use open without --print to keep a local server running")
+		if printOnly && (!remote || t.SSHHost != "") {
+			return usagef("--print requires a direct remote target; use open without --print to keep a local server or SSH tunnel running")
 		}
 		return a.withSession(cmd.Context(), t, func(s *core.Session) error {
 			runID := ""
@@ -125,8 +126,8 @@ func (a *app) openCommand() *cobra.Command {
 					return err
 				}
 			}
-			if s.Local && !printOnly {
-				fmt.Fprintln(cmd.ErrOrStderr(), "Local MLflow server is running. Press Ctrl+C to stop it.")
+			if (s.Local || t.SSHHost != "") && !printOnly {
+				fmt.Fprintln(cmd.ErrOrStderr(), "Managed MLflow connection is running. Press Ctrl+C to stop it.")
 				<-cmd.Context().Done()
 				return cmd.Context().Err()
 			}
@@ -151,7 +152,7 @@ func (a *app) configCommand() *cobra.Command {
 			path = config.DefaultPath()
 		}
 		t, resolveErr := config.Resolve(cfg, a.targetID, a.trackingURI)
-		result := map[string]any{"path": path, "config": safe}
+		result := map[string]any{"path": path, "state_path": localstate.DefaultPath(), "config": safe}
 		if resolveErr == nil {
 			result["effective_target"] = config.Redacted(&config.Config{Targets: []core.Target{t}}).Targets[0]
 		} else {
@@ -161,7 +162,7 @@ func (a *app) configCommand() *cobra.Command {
 			return a.output(cmd, result)
 		}
 		w := table(cmd.OutOrStdout())
-		fmt.Fprintf(w, "Config\t%s\nDefault target\t%s\n", cell(path), cell(cfg.DefaultTarget))
+		fmt.Fprintf(w, "Config\t%s\nLocal preferences\t%s\nDefault target\t%s\n", cell(path), cell(localstate.DefaultPath()), cell(cfg.DefaultTarget))
 		if resolveErr == nil {
 			fmt.Fprintf(w, "Effective target\t%s\nTracking URI\t%s\n", cell(t.ID), cell(config.RedactURI(t.TrackingURI)))
 		} else {
@@ -182,8 +183,8 @@ func (a *app) doctorCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		result := map[string]any{"version": a.options.Version, "platform": runtime.GOOS + "/" + runtime.GOARCH, "config_path": cfg.SourcePath(), "configured_targets": len(cfg.Targets)}
-		for _, name := range []string{"uv", "python3"} {
+		result := map[string]any{"version": a.options.Version, "platform": runtime.GOOS + "/" + runtime.GOARCH, "config_path": cfg.SourcePath(), "configured_targets": len(cfg.Targets), "state_path": localstate.DefaultPath()}
+		for _, name := range []string{"uv", "python3", "ssh"} {
 			path, err := exec.LookPath(name)
 			if err != nil {
 				result[name] = "not found"

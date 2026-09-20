@@ -82,10 +82,24 @@ func TestSharedFormAdvancedControlsAndPaste(t *testing.T) {
 	m.fields[13].Focus()
 	m.fields[13].SetValue("")
 	m.Update(tea.PasteMsg{Content: "AWS_PROFILE=MY_PROFILE\n"})
+	press(m, "enter") // SSH alias is the final advanced field.
 	cmd := press(m, "enter")
 	m.Update(cmd())
 	if m.Err != nil || m.Target.Env["AWS_PROFILE"] != "MY_PROFILE" {
 		t.Fatalf("pasted mapping invalid: %#v %v", m.Target.Env, m.Err)
+	}
+}
+
+func TestSharedFormSSHIsAdvancedAndReviewed(t *testing.T) {
+	target := draft()
+	target.SSHHost = "remote-lab"
+	m := New(target, "/tmp/config.toml", false)
+	m.Init()
+	m.focus = basicFields - 1
+	cmd := press(m, "enter")
+	m.Update(cmd())
+	if m.Err != nil || m.Target.SSHHost != "remote-lab" || !strings.Contains(m.View(120, 30), "SSH host: remote-lab") {
+		t.Fatalf("SSH field not retained/reviewed: %+v %v", m.Target, m.Err)
 	}
 }
 func TestSharedFormValidationIsInstanceScopedAndCancelSafe(t *testing.T) {
@@ -141,5 +155,108 @@ func TestSharedFormReviewEscapeAndDimensions(t *testing.T) {
 				t.Fatal("form exceeds available width")
 			}
 		}
+	}
+}
+
+func formPoint(t *testing.T, m *Model, id string) (int, int) {
+	t.Helper()
+	_, hits := m.content(m.width, m.height)
+	for _, h := range hits {
+		if h.ID == id && h.X < m.width && h.Y < m.height {
+			return h.X, h.Y
+		}
+	}
+	t.Fatalf("missing visible form hit %s", id)
+	return 0, 0
+}
+func clickForm(m *Model, x, y int) tea.Cmd {
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	_, cmd := m.Update(tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft})
+	return cmd
+}
+func TestFormMouseFocusTypingAndNoPressThrough(t *testing.T) {
+	m := New(draft(), "/tmp/config.toml", false)
+	m.Init()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	x, y := formPoint(t, m, "field:2")
+	clickForm(m, x, y)
+	if m.focus != 2 {
+		t.Fatal("click did not focus Tracking URI")
+	}
+	m.fields[2].SetValue("")
+	for _, r := range "qjk/123" {
+		press(m, string(r))
+	}
+	if m.fields[2].Value() != "qjk/123" || m.Cancelled || m.Done {
+		t.Fatal("typing invoked form shortcut")
+	}
+	x, y = formPoint(t, m, "field:1")
+	otherX, otherY := formPoint(t, m, "field:4")
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.MouseReleaseMsg{X: otherX, Y: otherY, Button: tea.MouseLeft})
+	if m.focus != 2 {
+		t.Fatal("release over another field activated it")
+	}
+	m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 29})
+	m.Update(tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft})
+	if m.focus != 2 {
+		t.Fatal("resize retained stale mouse press")
+	}
+}
+func TestFormMouseReviewUsesSemanticActions(t *testing.T) {
+	for _, action := range []string{"save", "edit", "cancel"} {
+		t.Run(action, func(t *testing.T) {
+			m := New(draft(), "/tmp/config.toml", false)
+			m.Init()
+			m.Update(tea.WindowSizeMsg{Width: 110, Height: 30})
+			m.focus = basicFields - 1
+			cmd := press(m, "enter")
+			m.Update(cmd())
+			x, y := formPoint(t, m, action)
+			m.Update(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+			if m.Done || m.Cancelled || !m.review {
+				t.Fatal("action executed on press")
+			}
+			m.Update(tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft})
+			switch action {
+			case "save":
+				if !m.Done {
+					t.Fatal("Save not submitted")
+				}
+			case "edit":
+				if m.review || m.Done || m.Cancelled {
+					t.Fatal("Edit did not restore fields")
+				}
+			case "cancel":
+				if !m.Cancelled {
+					t.Fatal("Cancel not applied")
+				}
+			}
+		})
+	}
+}
+func TestFormMouseHitGeometryIsPureAndDoesNotMatchUserText(t *testing.T) {
+	initial := draft()
+	initial.Name = "Enter save"
+	m := New(initial, "/tmp/config.toml", true)
+	m.Init()
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 12})
+	if m.hitAt(1, 1) != "" {
+		t.Fatal("fixed edit ID is clickable")
+	}
+	m.focus = 4
+	cmd := press(m, "enter")
+	m.Update(cmd())
+	beforeFocus, beforeGeneration := m.focus, m.generation
+	for i := 0; i < 3; i++ {
+		m.View(100, 12)
+		m.hitAt(10, 3)
+	}
+	if m.Done || m.focus != beforeFocus || m.generation != beforeGeneration {
+		t.Fatal("paint/hit calculation mutated the model")
+	}
+	if hit := m.hitAt(8, 3); hit != "" {
+		t.Fatalf("user-controlled review text became an action: %s", hit)
 	}
 }

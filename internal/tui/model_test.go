@@ -199,7 +199,9 @@ func TestRefreshFollowsIdentityAndKeepsRowsOnFailure(t *testing.T) {
 	m.selectRun(1)
 	m.loadRuns(false)
 	m.acceptRuns(runsMsg{target: "a", experiment: "e1", gen: m.runs().Gen, page: core.RunPage{Runs: []core.Run{sampleRun("r2"), sampleRun("r1")}}})
-	if m.runs().Index != 0 || m.run().ID() != "r2" {
+	// Equal start times now use the stable run ID tie-breaker. Selection
+	// follows identity even though the server response is in a different order.
+	if m.runs().Index != 1 || m.run().ID() != "r2" {
 		t.Fatal("refresh selected by position instead of identity")
 	}
 	m.loadRuns(false)

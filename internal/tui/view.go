@@ -97,6 +97,9 @@ func (m *model) View() tea.View {
 	if h < 5 || w < 16 {
 		v := tea.NewView(block([]string{"lazymlflow", "Resize terminal", "q quit"}, w, h))
 		v.AltScreen = true
+		if m.layout.Mouse {
+			v.MouseMode = tea.MouseModeCellMotion
+		}
 		return v
 	}
 	target := m.target().Label()
@@ -121,6 +124,9 @@ func (m *model) View() tea.View {
 	if h < 8 && m.inputMode != "" {
 		v := tea.NewView(block([]string{header, clean(m.inputLabel), m.input.View(), clean(m.status), "Enter accept · Esc cancel"}, w, h))
 		v.AltScreen = true
+		if m.layout.Mouse {
+			v.MouseMode = tea.MouseModeCellMotion
+		}
 		return v
 	}
 	contentHeight := h - 4
@@ -134,22 +140,24 @@ func (m *model) View() tea.View {
 		content = m.overlayView(w, contentHeight)
 	} else if m.compare {
 		content = frame("Compare · "+fmt.Sprint(len(m.selectedRuns()))+" runs · same target", m.compareLines(w-2, contentHeight-2), w, contentHeight, true)
-	} else if w >= 90 && contentHeight >= 12 {
-		left := min(30, w/4)
-		right := w - left
-		upper := max(6, contentHeight/2)
-		exp := frame("1 Experiments", m.experimentLines(left-2, contentHeight-2), left, contentHeight, m.focus == 0)
-		runs := frame("2 Runs", m.runLines(right-2, upper-2), right, upper, m.focus == 1)
-		detail := frame("3 "+m.detailTitle(), m.detailLines(right-2, contentHeight-upper-2), right, contentHeight-upper, m.focus == 2)
-		content = lipgloss.JoinHorizontal(lipgloss.Top, exp, runs+"\n"+detail)
 	} else {
-		switch m.focus {
-		case 0:
-			content = frame("1 Experiments · Tab: Runs", m.experimentLines(w-2, contentHeight-2), w, contentHeight, true)
-		case 1:
-			content = frame("2 Runs · Tab: Details", m.runLines(w-2, contentHeight-2), w, contentHeight, true)
-		case 2:
-			content = frame("3 "+m.detailTitle(), m.detailLines(w-2, contentHeight-2), w, contentHeight, true)
+		layout := m.geometry()
+		if layout.Split {
+			left, upper := layout.Panes[0].W, layout.Panes[1].H
+			right := w - left
+			exp := frame("1 Experiments", m.experimentLines(left-2, contentHeight-2), left, contentHeight, m.focus == 0)
+			runs := frame("2 Runs", m.runLines(right-2, upper-2), right, upper, m.focus == 1)
+			detail := frame("3 "+m.detailTitle(), m.detailLines(right-2, contentHeight-upper-2), right, contentHeight-upper, m.focus == 2)
+			content = lipgloss.JoinHorizontal(lipgloss.Top, exp, runs+"\n"+detail)
+		} else {
+			switch m.focus {
+			case 0:
+				content = frame("1 Experiments · z zoom / restore", m.experimentLines(w-2, contentHeight-2), w, contentHeight, true)
+			case 1:
+				content = frame("2 Runs", m.runLines(w-2, contentHeight-2), w, contentHeight, true)
+			case 2:
+				content = frame("3 "+m.detailTitle(), m.detailLines(w-2, contentHeight-2), w, contentHeight, true)
+			}
 		}
 	}
 	if m.inputMode != "" {
@@ -159,6 +167,9 @@ func (m *model) View() tea.View {
 	if s != nil && s.ConnectErr != "" {
 		status = "Connection error: " + s.ConnectErr + " · r retry · t targets"
 	}
+	if m.resizing {
+		status = "Resize: h/l left width · k/j upper height · 0 default · Enter/Esc save"
+	}
 	if m.prefix {
 		status = "g … (g again: first row)"
 	}
@@ -166,10 +177,25 @@ func (m *model) View() tea.View {
 	output := header + "\n" + content + "\n" + textFit(status, w) + "\n" + dimStyle.Render(textFit(footer, w)) + "\n" + dimStyle.Render(textFit(m.contextLine(), w))
 	v := tea.NewView(output)
 	v.AltScreen = true
+	if m.layout.Mouse {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	v.WindowTitle = "lazymlflow"
 	return v
 }
 func (m *model) contextLine() string {
+	if m.overlay != "" {
+		switch m.overlay {
+		case "columns":
+			return "Columns are saved separately for each experiment; names match logged keys exactly."
+		case "sort":
+			return "Server-supported sorts refresh globally; other sorts apply to loaded rows (A loads all)."
+		case "group":
+			return "Groups show loaded run counts; nested runs use mlflow.parentRunId."
+		default:
+			return "Esc returns to the previous pane and selection."
+		}
+	}
 	if m.targetForm != nil {
 		return "Shared target form · Python / .venv supported · Ctrl+O advanced settings"
 	}
@@ -180,7 +206,7 @@ func (m *model) contextLine() string {
 		return "Download pending · Ctrl+X cancel · q exits and cancels"
 	}
 	if m.focus == 1 && !m.compare {
-		return "↑↓/jk move · Tab focus · [/] scroll metric columns · gg/G first/last · ? help · q quit"
+		return "1/2/3 pane · z zoom · Ctrl+W resize · M mouse · [/] pan columns · ? help · q quit"
 	}
 	return "↑↓/jk move · Tab/Shift+Tab focus · ←→/hl context · gg/G first/last · ? help · q quit"
 }
@@ -189,6 +215,21 @@ func (m *model) footer() string {
 		return "Tab / Enter next · Shift+Tab previous · Esc back/cancel · Ctrl+C cancel form"
 	}
 	if m.overlay != "" {
+		if m.isPicker() {
+			if m.pickerTyping {
+				return "Type to search · ↑↓ select · Enter / Tab list focus · Esc close"
+			}
+			switch m.overlay {
+			case "columns":
+				return "Space select · < > reorder · [ ] width · n numeric · 0 reset · / search · Esc close"
+			case "sort":
+				return "Enter primary sort · Space secondary / direction · Backspace remove · n numeric · 0 reset · Esc close"
+			case "info", "parent-info":
+				return "↑↓/jk scroll · Enter / Esc close"
+			default:
+				return "Space / Enter select · / search · Esc close"
+			}
+		}
 		switch m.overlay {
 		case "targets":
 			return "↑↓/jk select · Enter connect · a add · e edit · Esc back"
@@ -210,113 +251,13 @@ func (m *model) footer() string {
 	}
 	return strings.Join(out, " · ")
 }
-func (m *model) experimentLines(w, h int) []string {
-	s := m.state()
-	if s == nil {
-		return []string{"No tracking targets.", "Press t, then a to add one."}
-	}
-	if s.ConnectPending {
-		return []string{"Connecting in background…", "Navigation remains available.", "Esc cancels; t switches target."}
-	}
-	lines := []string{fmt.Sprintf("%d loaded%s", len(s.Experiments), pending(s.Pending))}
-	if s.Local != "" {
-		lines = append(lines, "Local: "+clean(s.Local))
-	}
-	if s.Filter != "" {
-		lines = append(lines, "Server: "+clean(s.Filter))
-	}
-	if s.Err != "" {
-		lines = append(lines, "Refresh failed; previous rows kept", clean(s.Err))
-	}
-	rows := m.experimentsVisible()
-	if len(rows) == 0 {
-		if !s.Pending {
-			lines = append(lines, "No matching experiments.", "/ search · f server filter")
-		}
-		return lines
-	}
-	capacity := max(1, h-len(lines)-1)
-	start := listStart(s.Index, len(rows), capacity)
-	for i := start; i < min(len(rows), start+capacity); i++ {
-		e := rows[i]
-		lines = append(lines, row(e.Name+" ["+e.ID+"]", e.ID == s.Selected, w))
-	}
-	if s.Next != "" {
-		lines = append(lines, "n: next page (server ordered)")
-	}
-	return lines
-}
-func (m *model) runLines(w, h int) []string {
-	r := m.runs()
-	if r == nil || m.state().Selected == "" {
-		return []string{"Choose an experiment."}
-	}
-	lines := []string{fmt.Sprintf("%d loaded%s · %s", len(r.Rows), pending(r.Pending), clean(r.Order))}
-	if r.Local != "" {
-		lines = append(lines, "Local: "+clean(r.Local))
-	}
-	if r.Filter != "" {
-		lines = append(lines, "Server: "+clean(r.Filter))
-	}
-	if r.Err != "" {
-		lines = append(lines, "Refresh failed; previous rows kept", clean(r.Err))
-	}
-	nameWidth := max(12, min(28, w/3))
-	columns := append([]string(nil), m.metricColumns...)
-	columns = append(columns, m.paramColumns...)
-	showTime := len(columns) == 0 || w >= 105
-	head := fit("", 4) + fit("RUN", nameWidth) + fit("STATUS", 12)
-	if showTime {
-		head += fit("STARTED", 17)
-	}
-	firstColumn := clamp(m.columnPan, 0, len(columns)-1)
-	for i := firstColumn; i < len(columns); i++ {
-		prefix := "m:"
-		if i >= len(m.metricColumns) {
-			prefix = "p:"
-		}
-		head += fit(prefix+clean(columns[i]), 15)
-	}
-	lines = append(lines, dimStyle.Render(head))
-	rows := m.runsVisible()
-	if len(rows) == 0 {
-		if !r.Pending {
-			lines = append(lines, "No matching runs. / search · f server filter")
-		}
-		return lines
-	}
-	capacity := max(1, h-len(lines)-1)
-	start := listStart(r.Index, len(rows), capacity)
-	for i := start; i < min(len(rows), start+capacity); i++ {
-		run := rows[i]
-		mark := "  "
-		if _, ok := m.state().Basket[run.ID()]; ok {
-			mark = "* "
-		}
-		line := mark + fit(clean(run.Name()), nameWidth) + fit(clean(run.Info.Status), 12)
-		if showTime {
-			line += fit(timestamp(run.Info.StartTime), 17)
-		}
-		for i := firstColumn; i < len(columns); i++ {
-			value := "—"
-			if i < len(m.metricColumns) {
-				if v, ok := run.Metric(columns[i]); ok {
-					value = v.String()
-				}
-			} else {
-				value = findKV(run.Data.Params, columns[i])
-			}
-			line += textFit(value, 15)
-		}
-		lines = append(lines, row(line, run.ID() == r.Selected, w))
-	}
-	if r.Next != "" {
-		lines = append(lines, "n: next page · sorting/filter apply to the full server query")
-	}
-	return lines
+func (m *model) experimentLines(w, h int) []string { return m.experimentContent(w, h).Lines }
+func (m *model) runLines(w, h int) []string        { return m.runContent(w, h).Lines }
+func detailTabs() []string {
+	return []string{"Overview", "Metrics", "Params", "Tags", "Artifacts", "Datasets"}
 }
 func (m *model) detailTitle() string {
-	tabs := []string{"Overview", "Metrics", "Params", "Tags", "Artifacts"}
+	tabs := detailTabs()
 	for i, t := range tabs {
 		if i == m.tab {
 			tabs[i] = "[" + t + "]"
@@ -348,6 +289,12 @@ func (m *model) detailLines(w, h int) []string {
 		lines = kvLines(r.Data.Params)
 	case 3:
 		lines = kvLines(r.Data.Tags)
+	case 5:
+		for _, input := range r.Inputs.DatasetInputs {
+			d := input.Dataset
+			lines = append(lines, "Dataset: "+clean(d.Name), "Digest: "+clean(d.Digest), "Context: "+findKV(input.Tags, "mlflow.data.context"), "Source: "+clean(d.SourceType+" "+d.Source), "Schema: "+clean(d.Schema))
+			lines = append(lines, kvLines(input.Tags)...)
+		}
 	case 4:
 		a := m.artifacts()
 		lines = append(lines, "/"+clean(m.currentPath())+"   (h: parent · l/Enter: enter · d: download)")
@@ -384,6 +331,9 @@ func (m *model) detailLines(w, h int) []string {
 	return lines[start:]
 }
 func (m *model) overlayView(w, h int) string {
+	if m.isPicker() {
+		return m.pickerView(w, h)
+	}
 	var title string
 	var lines []string
 	switch m.overlay {

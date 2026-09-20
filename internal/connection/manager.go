@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -21,9 +22,12 @@ import (
 )
 
 type entry struct {
-	ready   chan struct{}
-	session *core.Session
-	err     error
+	ready    chan struct{}
+	session  *core.Session
+	err      error
+	targetID string
+	cancel   context.CancelFunc
+	replaced bool
 }
 
 type Manager struct {
@@ -35,6 +39,7 @@ type Manager struct {
 	// These indirections permit deterministic lifecycle tests without a Python
 	// installation or downloads. Production constructors always use defaults.
 	prepare        func(context.Context, core.Target, []string) (runtimeCommand, error)
+	sshStart       func(context.Context, core.Target, []string) (string, func() error, error)
 	startupTimeout time.Duration
 }
 
@@ -62,12 +67,30 @@ func (m *Manager) Open(ctx context.Context, target core.Target) (*core.Session, 
 		return nil, errors.New("connection manager is closed")
 	}
 	e, exists := m.entries[key]
+	var replaced []*entry
 	if !exists {
-		e = &entry{ready: make(chan struct{})}
+		// Editing a target replaces its managed resources. Different IDs may
+		// remain warm when the dashboard switches between them.
+		for priorKey, prior := range m.entries {
+			if prior.targetID == target.ID {
+				prior.replaced = true
+				prior.cancel()
+				delete(m.entries, priorKey)
+				replaced = append(replaced, prior)
+			}
+		}
+		lifetime, cancel := context.WithCancel(m.ctx)
+		e = &entry{ready: make(chan struct{}), targetID: target.ID, cancel: cancel}
 		m.entries[key] = e
-		go m.initialize(ctx, key, e, target)
+		go m.initialize(ctx, lifetime, key, e, target)
 	}
 	m.mu.Unlock()
+	for _, prior := range replaced {
+		<-prior.ready
+		if prior.session != nil {
+			_ = prior.session.Close()
+		}
+	}
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -78,23 +101,27 @@ func (m *Manager) Open(ctx context.Context, target core.Target) (*core.Session, 
 	}
 }
 
-func (m *Manager) initialize(request context.Context, key string, e *entry, target core.Target) {
-	ctx, cancel := context.WithCancel(m.ctx)
+func (m *Manager) initialize(request, lifetime context.Context, key string, e *entry, target core.Target) {
+	ctx, cancel := context.WithCancel(lifetime)
 	stop := context.AfterFunc(request, cancel)
 	s, err := m.connect(ctx, target)
 	stop()
 	cancel()
 	m.mu.Lock()
-	if m.closed && s != nil {
+	if (m.closed || e.replaced) && s != nil {
 		_ = s.Close()
 		s = nil
-		err = errors.New("connection manager is closed")
+		err = errors.New("connection was closed or its target configuration was replaced")
 	}
 	if err != nil {
-		delete(m.entries, key)
+		e.cancel()
+		if m.entries[key] == e {
+			delete(m.entries, key)
+		}
 	} else {
 		closeProcess := s.CloseFunc
 		s.CloseFunc = func() error {
+			e.cancel()
 			m.mu.Lock()
 			if m.entries[key] == e {
 				delete(m.entries, key)
@@ -138,6 +165,15 @@ func (m *Manager) Close() error {
 }
 
 func (m *Manager) connect(ctx context.Context, t core.Target) (*core.Session, error) {
+	// Artifact subprocesses belong to this session as well as their individual
+	// operation; replacing/closing a target must not leave a download running.
+	sessionContext, cancelSession := context.WithCancel(m.ctx)
+	connected := false
+	defer func() {
+		if !connected {
+			cancelSession()
+		}
+	}()
 	credentials, err := credentialsFor(t)
 	if err != nil {
 		return nil, err
@@ -156,6 +192,26 @@ func (m *Manager) connect(ctx context.Context, t core.Target) (*core.Session, er
 	runtimeVersion := ""
 	var stop func() error
 	var runtimeSpec *runtimeCommand
+	if t.SSHHost != "" {
+		start := m.startSSH
+		if m.sshStart != nil {
+			start = m.sshStart
+		}
+		forward, closeForward, e := start(ctx, t, secrets)
+		if e != nil {
+			client.CloseIdleConnections()
+			return nil, e
+		}
+		base, stop, err = startSSHProxy(t, forward, client, credentials, closeForward)
+		if err != nil {
+			_ = closeForward()
+			client.CloseIdleConnections()
+			return nil, err
+		}
+		// All consumers use the same loopback proxy. It owns TLS and scoped
+		// credentials to the original upstream, including browser requests.
+		client, _ = httpClient(core.Target{})
+	}
 	if local {
 		backend, artifactRoot, e := localStore(t)
 		if e != nil {
@@ -176,8 +232,8 @@ func (m *Manager) connect(ctx context.Context, t core.Target) (*core.Session, er
 	artifactCLI := func(callCtx context.Context, args []string) ([]byte, error) {
 		callCtx, callCancel := context.WithCancel(callCtx)
 		defer callCancel()
-		stopOnManagerClose := context.AfterFunc(m.ctx, callCancel)
-		defer stopOnManagerClose()
+		stopOnSessionClose := context.AfterFunc(sessionContext, callCancel)
+		defer stopOnSessionClose()
 		if err := callCtx.Err(); err != nil {
 			return nil, err
 		}
@@ -194,26 +250,53 @@ func (m *Manager) connect(ctx context.Context, t core.Target) (*core.Session, er
 		runtimeMu.Unlock()
 		cliEnv := setEnv(env, "MLFLOW_TRACKING_URI", base)
 		cliEnv = setEnv(cliEnv, "MLFLOW_REGISTRY_URI", base)
+		if t.SSHHost != "" {
+			cliEnv = bypassLoopbackProxy(cliEnv)
+		}
 		output, err := runCapture(callCtx, r.command(args...), t.WorkingDir, cliEnv, secrets, 4<<20)
 		if err != nil {
 			return nil, fmt.Errorf("MLflow artifacts (%s): %w", r.version, err)
 		}
 		return output, nil
 	}
-	backend := mlflow.New(base, mlflow.Options{HTTPClient: client, Username: credentials.username, Password: credentials.password, Token: credentials.token, Local: local, ArtifactCLI: artifactCLI, ArtifactDestination: t.ArtifactsDestination})
+	originalURI := ""
+	if t.SSHHost != "" {
+		originalURI = t.TrackingURI
+	}
+	backend := mlflow.New(base, mlflow.Options{HTTPClient: client, Username: credentials.username, Password: credentials.password, Token: credentials.token, Local: local, ArtifactCLI: artifactCLI, ArtifactDestination: t.ArtifactsDestination, OriginalTrackingURI: originalURI})
 	if !local {
 		versionCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		runtimeVersion, _ = backend.ServerVersion(versionCtx)
 		cancel()
 		if ctx.Err() != nil {
+			client.CloseIdleConnections()
+			if stop != nil {
+				_ = stop()
+			}
 			return nil, ctx.Err()
 		}
 	}
 	web := t.WebURL
+	if t.SSHHost != "" {
+		if web == "" {
+			web = base
+		} else {
+			origin, _ := url.Parse(t.TrackingURI)
+			browser, _ := url.Parse(web)
+			if strings.EqualFold(browser.Scheme, origin.Scheme) && strings.EqualFold(browser.Host, origin.Host) && withinBase(browser.Path, strings.TrimRight(origin.Path, "/")) {
+				proxy, _ := url.Parse(base)
+				browser.Scheme = proxy.Scheme
+				browser.Host = proxy.Host
+				web = browser.String()
+			}
+		}
+	}
 	if web == "" {
 		web = base
 	}
+	connected = true
 	return &core.Session{Backend: backend, Target: t, BaseURL: base, WebURL: web, RuntimeVersion: runtimeVersion, Local: local, CloseFunc: func() error {
+		cancelSession()
 		client.CloseIdleConnections()
 		if stop != nil {
 			return stop()
@@ -322,4 +405,20 @@ func setEnv(env []string, key, value string) []string {
 		}
 	}
 	return append(out, key+"="+value)
+}
+
+func bypassLoopbackProxy(env []string) []string {
+	// Python requests honors proxy environment settings even for localhost.
+	// Preserve all existing exclusions and add only the owned proxy's address.
+	var exclusions []string
+	for _, item := range env {
+		name, value, _ := strings.Cut(item, "=")
+		if strings.EqualFold(name, "no_proxy") && value != "" {
+			exclusions = append(exclusions, value)
+		}
+	}
+	exclusions = append(exclusions, "127.0.0.1")
+	value := strings.Join(exclusions, ",")
+	env = setEnv(env, "NO_PROXY", value)
+	return setEnv(env, "no_proxy", value)
 }

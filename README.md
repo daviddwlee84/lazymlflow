@@ -1,7 +1,8 @@
 # lazymlflow
 
 A keyboard-driven Go CLI/TUI for browsing MLflow experiments, comparing runs,
-and downloading artifacts. Remote tracking uses the public REST API. Local
+and downloading artifacts, with mouse navigation, resizable panes, per-experiment
+views, nested runs and parameter groups. Remote tracking uses the public REST API. Local
 `mlruns` and SQLite targets run an owned, temporary **official MLflow server**;
 lazymlflow does not implement MLflow's storage format or database schema.
 
@@ -33,6 +34,7 @@ upgraded by lazymlflow.
 lazymlflow targets add lab --uri https://mlflow.example.com
 lazymlflow targets add legacy --uri ./mlruns --python ./.venv
 lazymlflow targets add local --uri sqlite:///mlflow.db --python ./.venv/bin/python
+lazymlflow targets add remote-ssh --uri http://127.0.0.1:8000 --ssh-host my-ssh-alias
 lazymlflow targets default lab
 lazymlflow targets test local
 lazymlflow --target lab
@@ -92,6 +94,20 @@ with MLflow. Optional `env` maps child-variable names to environment-variable
 references, and `extra_packages = ["boto3"]` adds packages to a uv runtime.
 Never store credential values in target URLs.
 
+An optional `ssh_host` uses an existing OpenSSH alias. The tracking URI is
+interpreted from that host, so `http://127.0.0.1:8000` means its loopback service.
+lazymlflow owns the forwarding connection and a scoped loopback proxy, shared by
+REST, artifact commands and browser access. HTTPS retains the upstream hostname
+and CA checks. Configure a working `ssh my-ssh-alias` login first: the application
+uses noninteractive authentication, requires an already trusted host key, and
+does not alter SSH configuration or reuse/stop your control-master connections.
+
+MLflow 3.5+ may reject direct requests with an **Invalid Host header** error.
+The server administrator can add the exact IP/hostname and port to
+`MLFLOW_SERVER_ALLOWED_HOSTS` or `--allowed-hosts`, preserving the existing
+allowlist. An SSH target also works with a server that accepts only loopback
+access. The application does not automatically modify remote server settings.
+
 `config show --json` displays redacted effective configuration. `doctor` tests
 the selected connection and reports the actual version; `doctor --offline`
 only inspects configuration and available tools.
@@ -101,25 +117,35 @@ only inspects configuration and available tools.
 Run `lazymlflow` in a terminal. Experiments, runs and the selected run's details
 stay visible at wider sizes; a narrow terminal shows the active pane. Each
 target retains its own selections, filters and comparison basket for the
-session.
+session. Pane proportions, mouse preference, experiment-specific views and
+local visibility choices persist across launches.
 
 | Key | Action |
 | --- | --- |
 | Arrows / `j k`, `gg` / `G` | Navigate |
 | Tab / Shift+Tab | Change pane |
+| `1` / `2` / `3` | Focus experiments / runs / details |
+| `z` / `i` | Zoom focused pane / show full experiment information |
+| Ctrl+W, then `h j k l` | Resize panes; `0` resets, Enter/Esc finishes |
+| `M` | Toggle mouse capture (`--mouse=false` disables it at launch) |
 | `h l` | Change pane, or parent/enter in artifacts |
 | `t` | Target picker; `a` add and `e` edit inside picker |
 | `/` | Search already loaded rows; Enter accepts, Esc clears |
 | `f` | Submit a server-side MLflow filter |
-| `s` | Set server-side sort order |
+| `s` | Searchable sort picker; Enter sets primary, Space adds secondary |
+| `b` | Parameter groups, nested/flat mode and default expansion |
+| `L` / `V` | Layout / local visibility menus |
+| `H` / `X` / `U` | Hide / archive / restore the selected item locally |
 | `n` | Load next page |
+| `A` / Ctrl+X | Load all matching pages / cancel background collection |
 | `r` | Refresh; previous rows survive a failed refresh |
 | Space / `c` | Select runs / open comparison |
 | `x` | Compare only differences |
 | `m` | Choose a metric and load history |
-| `v` | Run columns, or toggle comparison table/chart |
+| `v` | Searchable column checkboxes, or toggle comparison table/chart |
 | `a` in chart | Switch step / elapsed-time axis |
 | `[` / `]` | Change details tab |
+| `P` | Inspect a parent run that is outside the loaded results |
 | `d` / `D` / Ctrl+X | Download selection / current directory / cancel download |
 | `o` / `y` | Open selected resource in browser / copy full ID or path |
 | `?` / `:` | Context help / action menu |
@@ -127,7 +153,11 @@ session.
 
 Text fields own printable keys; typing `q`, `j` or `/` never activates a
 navigation shortcut. The help/footer describe the actions valid in the current
-context. A `*` in the pane title marks focus even without color. Colors are
+context. In Runs, `[`/`]` pan additional columns while keeping Run name visible.
+Mouse clicks select rows and activate the visible controls, the wheel scrolls
+the hovered pane, and dragging a pane divider or column edge resizes it. Menus
+consume mouse events so clicks cannot activate rows underneath. A `*` in the
+pane title marks focus even without color. Colors are
 optional (`NO_COLOR`); Nerd Fonts are not required.
 
 Comparison works across experiments **within one target**. Tables show latest
@@ -135,6 +165,71 @@ values returned by MLflow, not the best historical value. Missing metrics are
 `—`; NaN/infinities stay distinct. History retains repeated steps and plots by
 step or elapsed time. Display sampling does not change the underlying metric
 values. A selected metric's direction is never assumed to mean better/worse.
+
+## Columns, sorting and grouping
+
+The Columns menu groups attributes, native dataset inputs, parameters, metrics
+and tags. Search the actual logged keys (including spaces such as `learning
+rate`), press Enter/Tab to leave the search field, then Space to toggle a column.
+Use `<`/`>` to reorder, `[`/`]` to adjust width and `n` for numeric interpretation.
+Run name remains pinned; dataset columns can be restricted to an input context.
+The Datasets detail tab shows every input, including its name, digest, context
+and source. Multiple inputs are preserved rather than silently selecting one.
+
+Every experiment remembers its own columns, widths, multi-column sort,
+grouping, expansion, filter and visibility. Defaults still come from `[tui]`;
+there is no assumption that unrelated experiments use the same parameter keys.
+
+Sorting immediately previews the loaded rows. Supported metric/parameter/tag/
+attribute ordering also fetches the server-sorted page in the background, while
+navigation remains usable. Parameters/tags use MLflow string semantics unless
+numeric interpretation is explicitly selected. Dataset, duration and numeric
+parameter sorts are local and labeled **loaded rows**; `A` loads all matching
+pages, with Ctrl+X cancellation. Missing values and NaNs are not replaced by
+zero. Sorting ends with a stable run-ID tie-break.
+
+The Group by menu can combine multiple exact parameter keys. Groups use raw
+logged values, distinguish missing from empty, and show loaded counts; runs
+inside each group use the selected sort. Groups do not claim aggregate metrics
+or complete membership while pages remain unloaded.
+
+Auto mode switches to a tree when a `mlflow.parentRunId` tag is present. `h/l`
+collapses/expands nodes; default expansion is one level and can be changed to
+collapsed or all. A parent missing from a page, excluded by a filter or locally
+hidden becomes a context row without hiding its children. `P` inspects it.
+Flat, tree and parameter-group modes are alternatives: flat shows the global
+ranking, while a tree sorts siblings and parameter groups sort their members.
+
+## Local preferences and visibility
+
+Personal state is separate from every MLflow backend:
+`$XDG_DATA_HOME/lazymlflow/state.db`, falling back to
+`~/.local/share/lazymlflow/state.db`. It uses pure-Go SQLite (no CGo/Python),
+transactional versioned setup and bounded lock waits. It contains preferences
+and visibility entries, not a replica of runs, metrics or credentials.
+
+Hidden/archived items are excluded from the normal view; `V` shows hidden,
+archived or all items and `U` restores them. These actions never modify MLflow
+lifecycle/tags or other users' web views. Hiding a parent does not hide its
+children; hiding an experiment does not rewrite its runs. Source identity uses
+the configured target/origin, not a temporary SSH/local-server port.
+
+```sh
+lazymlflow view set 11 --column dataset:name --column 'param:learning rate' \
+  --column metric:valid_loss --sort 'metric:valid_loss ASC'
+lazymlflow view set 11 --group-by optimizer --group-by 'learning rate'
+lazymlflow view show 11 --json
+lazymlflow view hide --run RUN_ID
+lazymlflow view archive --experiment 11
+lazymlflow view restore --experiment 11
+lazymlflow view reset 11
+lazymlflow runs list 11 --use-view --json
+```
+
+These local view commands work without connecting to MLflow. Ordinary CLI
+queries retain their raw server behavior; `--use-view` explicitly applies
+personal settings. Saved run views require one explicit experiment. Local
+sorting never silently loads all pages: use `--all` for a complete matching set.
 
 ## CLI
 
@@ -176,7 +271,8 @@ original MLflow web UI has its own controls.
 A local server listens only on `127.0.0.1`, with one worker. The TUI starts it
 in the background on first use and reuses it until exit. CLI queries keep it
 alive through the complete query/download, then stop it. Local `open` stays in
-the foreground until Ctrl+C so the browser's URL remains usable. Existing
+the foreground until Ctrl+C so the browser's URL remains usable. SSH `open`
+has the same foreground lifetime; `--print` rejects ephemeral SSH URLs. Existing
 remote/Compose servers are never stopped. No daemon or persistent background
 server is installed.
 

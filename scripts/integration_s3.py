@@ -192,7 +192,7 @@ def main():
         endpoint = stack.enter_context(native_minio(args.minio_executable, root)
                                        if args.minio_executable else minio(args.image))
         os.environ["MLFLOW_S3_ENDPOINT_URL"] = endpoint
-        env = dict(os.environ, XDG_CONFIG_HOME=str(root / "config"),
+        env = dict(os.environ, XDG_CONFIG_HOME=str(root / "config"), XDG_DATA_HOME=str(root / "data"),
                    XDG_CACHE_HOME=str(root / "cache"), XDG_STATE_HOME=str(root / "state"),
                    NO_COLOR="1")
         s3 = boto3.client("s3", endpoint_url=endpoint,

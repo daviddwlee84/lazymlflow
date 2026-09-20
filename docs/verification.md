@@ -1,7 +1,55 @@
 # Verification record
 
-Verified on 2026-09-20 using disposable configuration, stores, credentials and
-artifact destinations. Existing user experiment data was not used.
+Verified on 2026-09-20. Automated fixtures use disposable configuration, stores,
+credentials and artifact destinations; authorized read-only checks against an
+existing server are called out in the v0.2 record below.
+
+## v0.2 verification
+
+The v0.2 checks used disposable configuration and XDG data directories. An
+existing remote MLflow 3.6.0 server was also queried read-only to check its real
+dataset/parameter conventions; personal visibility changes stayed in the
+temporary local state database.
+
+- macOS arm64 and native Linux arm64, **Go 1.25.0**: full vet, race tests, build,
+  and actual PTY checks passed. The Linux test container and temporary toolchain
+  files were removed afterward.
+- Real PTY: SGR mouse click/wheel/drag, pane resize, numeric focus shortcuts, zoom,
+  mouse capture toggle, column checkbox selection, parameter grouping and SQLite
+  persistence, plus the existing comparison/history/artifact/target-switch flows.
+- Shared target forms: standalone and embedded geometry, field focus, literal
+  text input, review/save/edit/cancel semantics, disabled-mouse behavior, stale
+  click rejection and terminal restoration.
+- Real MLflow 3.6.0: native dataset inputs; the exact `learning rate` parameter;
+  optimizer + learning-rate grouping; per-experiment isolation; saved TUI view
+  restoration; local hide/archive/restore. Raw queries and remote run lifecycle
+  remained unchanged. Nested runs use fixtures because the sampled active
+  experiments have no parent-run tags.
+- SSH: real remote version/experiment queries, browser access, and direct versus
+  SSH artifact downloads with identical bytes. Unit tests cover private CA/TLS
+  names, prefix boundaries, host/origin validation, authentication precedence,
+  redirects, replacement, cancellation and process cleanup.
+- Authorized remote deployment configuration: effective allowed-host defaults
+  preserved, explicit Tailscale endpoints appended, and missing-curl healthcheck
+  replaced by Python urllib. Only MLflow was recreated; database and object-store
+  containers remained running with unchanged IDs. Host allow/reject and healthy
+  container state were verified. The remote config has a separate backup and was
+  not committed by this implementation session.
+- Local state: absent-store reads, schema setup/version checks, failed writes,
+  concurrent updates, bounded locks, cancellation, source isolation and restored
+  views are covered by tests. Data queries apply personal views only with
+  `--use-view`; JSON distinguishes complete results from locally sorted pages.
+
+Performance measurements are local observations, not universal latency targets.
+On an Apple M4 with 10,000 loaded runs, cached rendering measured approximately
+0.324 ms / 125 KB per frame versus 27.7 ms / 37 MB before caching. Precomputed
+sort keys reduced metric sorting from about 50.8 ms to 2.54 ms, and dataset
+sorting from 179.4 ms to 6.87 ms. Reproduce with:
+
+```sh
+go test ./internal/core -run '^$' -bench BenchmarkSortRuns -benchmem
+go test ./internal/tui -run '^$' -bench BenchmarkDashboardLoadedRuns -benchmem
+```
 
 ## Automated checks and terminal behavior
 
@@ -50,6 +98,6 @@ this implementation session.
 ## Boundaries
 
 Databricks-specific behavior, direct PostgreSQL/MySQL access, registry/tracing
-features and cross-target comparisons are outside v1. Other artifact providers
+features and cross-target comparisons remain outside this version. Other artifact providers
 may work with a configured MLflow environment but were not tested. Browser and
 clipboard actions depend on the OS's available desktop commands.

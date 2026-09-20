@@ -24,13 +24,13 @@ func (a *app) targetsCommand() *cobra.Command {
 			return a.output(cmd, map[string]any{"default_target": cfg.DefaultTarget, "targets": safe.Targets})
 		}
 		w := table(cmd.OutOrStdout())
-		fmt.Fprintln(w, "ID\tNAME\tDEFAULT\tTRACKING URI")
+		fmt.Fprintln(w, "ID\tNAME\tDEFAULT\tTRACKING URI\tSSH HOST")
 		for _, t := range safe.Targets {
 			mark := ""
 			if t.ID == cfg.DefaultTarget {
 				mark = "*"
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", cell(t.ID), cell(t.Label()), mark, cell(t.TrackingURI))
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", cell(t.ID), cell(t.Label()), mark, cell(t.TrackingURI), cell(t.SSHHost))
 		}
 		return w.Flush()
 	}})
@@ -123,6 +123,7 @@ func (a *app) targetWriteCommand(edit bool) *cobra.Command {
 	cmd := &cobra.Command{Use: verb + " [ID]", Short: short, Args: rangeArgs(0, 1), Example: "  lazymlflow targets " + verb + " local --uri ./mlruns\n  lazymlflow targets " + verb + " staging --uri https://mlflow.example.com --token-env MLFLOW_TRACKING_TOKEN\n  lazymlflow targets " + verb + " --interactive"}
 	f := cmd.Flags()
 	f.StringVar(&supplied.TrackingURI, "uri", "", "Tracking HTTP endpoint, local folder, file URI, or SQLite URI")
+	f.StringVar(&supplied.SSHHost, "ssh-host", "", "OpenSSH host/alias; tracking URI is reached from that host")
 	f.StringVar(&supplied.Name, "name", "", "Display name")
 	f.StringVar(&supplied.WebURL, "web-url", "", "Browser URL when different from the tracking endpoint")
 	f.StringVar(&supplied.WorkingDir, "working-dir", "", "Original working directory for local artifacts")
@@ -216,7 +217,7 @@ func (a *app) targetWriteCommand(edit bool) *cobra.Command {
 			if path == "" {
 				path = config.DefaultPath()
 			}
-			draft, err = runTargetForm(cmd.Context(), a.options.In, a.options.Out, draft, edit, path, func(target core.Target) error {
+			draft, err = runTargetForm(cmd.Context(), a.options.In, a.options.Out, draft, edit, path, a.mouse, func(target core.Target) error {
 				if !edit && targetIndex(cfg.Targets, target.ID) >= 0 {
 					return usagef("target %q already exists; choose another ID", target.ID)
 				}
@@ -258,7 +259,7 @@ func (a *app) targetWriteCommand(edit bool) *cobra.Command {
 	return cmd
 }
 
-var targetFlagNames = []string{"uri", "name", "web-url", "working-dir", "python", "mlflow-version", "artifacts-destination", "token-env", "username-env", "password-env", "ca-file", "extra-package", "env"}
+var targetFlagNames = []string{"uri", "ssh-host", "name", "web-url", "working-dir", "python", "mlflow-version", "artifacts-destination", "token-env", "username-env", "password-env", "ca-file", "extra-package", "env"}
 
 func hasTargetChanges(cmd *cobra.Command) bool {
 	for _, key := range targetFlagNames {
@@ -273,7 +274,7 @@ func applyTargetFlags(cmd *cobra.Command, dst *core.Target, src core.Target) {
 		name  string
 		to    *string
 		value string
-	}{{"uri", &dst.TrackingURI, src.TrackingURI}, {"name", &dst.Name, src.Name}, {"web-url", &dst.WebURL, src.WebURL}, {"working-dir", &dst.WorkingDir, src.WorkingDir}, {"python", &dst.Python, src.Python}, {"mlflow-version", &dst.MLflowVersion, src.MLflowVersion}, {"artifacts-destination", &dst.ArtifactsDestination, src.ArtifactsDestination}, {"token-env", &dst.TokenEnv, src.TokenEnv}, {"username-env", &dst.UsernameEnv, src.UsernameEnv}, {"password-env", &dst.PasswordEnv, src.PasswordEnv}, {"ca-file", &dst.CAFile, src.CAFile}}
+	}{{"uri", &dst.TrackingURI, src.TrackingURI}, {"ssh-host", &dst.SSHHost, src.SSHHost}, {"name", &dst.Name, src.Name}, {"web-url", &dst.WebURL, src.WebURL}, {"working-dir", &dst.WorkingDir, src.WorkingDir}, {"python", &dst.Python, src.Python}, {"mlflow-version", &dst.MLflowVersion, src.MLflowVersion}, {"artifacts-destination", &dst.ArtifactsDestination, src.ArtifactsDestination}, {"token-env", &dst.TokenEnv, src.TokenEnv}, {"username-env", &dst.UsernameEnv, src.UsernameEnv}, {"password-env", &dst.PasswordEnv, src.PasswordEnv}, {"ca-file", &dst.CAFile, src.CAFile}}
 	for _, field := range fields {
 		if cmd.Flags().Changed(field.name) {
 			*field.to = field.value

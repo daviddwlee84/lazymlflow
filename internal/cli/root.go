@@ -15,6 +15,7 @@ import (
 	"github.com/daviddwlee84/lazymlflow/internal/config"
 	"github.com/daviddwlee84/lazymlflow/internal/connection"
 	"github.com/daviddwlee84/lazymlflow/internal/core"
+	"github.com/daviddwlee84/lazymlflow/internal/localstate"
 	"github.com/daviddwlee84/lazymlflow/internal/platform"
 	"github.com/daviddwlee84/lazymlflow/internal/tui"
 	"github.com/spf13/cobra"
@@ -31,6 +32,7 @@ type Options struct {
 	Dashboard  func(context.Context, tui.Options) error
 	OpenURL    func(context.Context, string) error
 	LoadConfig func(string) (*config.Config, error)
+	State      core.StateStore
 }
 
 type app struct {
@@ -40,6 +42,7 @@ type app struct {
 	trackingURI string
 	jsonOutput  bool
 	interactive bool
+	mouse       bool
 	connector   core.Connector
 }
 
@@ -137,6 +140,7 @@ func NewRoot(options Options) *cobra.Command {
 	root.PersistentFlags().StringVar(&a.trackingURI, "tracking-uri", "", "Temporary HTTP endpoint, local store, or SQLite URI")
 	root.PersistentFlags().BoolVar(&a.jsonOutput, "json", false, "Write machine-readable JSON")
 	root.PersistentFlags().BoolVar(&a.interactive, "interactive", false, "Open the dashboard or a supported target form")
+	root.PersistentFlags().BoolVar(&a.mouse, "mouse", true, "Enable dashboard mouse controls (explicit value overrides saved preference)")
 	root.MarkFlagsMutuallyExclusive("target", "tracking-uri")
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		if cmd.Flags().Changed("target") && cmd.Flags().Changed("tracking-uri") {
@@ -164,9 +168,9 @@ func NewRoot(options Options) *cobra.Command {
 		if !options.IsTerminal() {
 			return cmd.Help()
 		}
-		return a.dashboard(cmd.Context())
+		return a.dashboard(cmd.Context(), cmd.Flags().Changed("mouse"))
 	}
-	root.AddCommand(a.targetsCommand(), a.experimentsCommand(), a.runsCommand(), a.metricsCommand(), a.artifactsCommand(), a.openCommand(), a.configCommand(), a.doctorCommand())
+	root.AddCommand(a.targetsCommand(), a.experimentsCommand(), a.runsCommand(), a.metricsCommand(), a.artifactsCommand(), a.openCommand(), a.configCommand(), a.doctorCommand(), a.viewCommand())
 	root.AddCommand(&cobra.Command{Use: "version", Short: "Print the build version", Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if a.jsonOutput {
 			return a.output(cmd, map[string]string{"version": options.Version})
@@ -269,7 +273,7 @@ func (a *app) output(cmd *cobra.Command, value any) error {
 	return enc.Encode(value)
 }
 
-func (a *app) dashboard(ctx context.Context) error {
+func (a *app) dashboard(ctx context.Context, mouseExplicit bool) error {
 	cfg, err := a.load()
 	if err != nil {
 		return err
@@ -299,7 +303,13 @@ func (a *app) dashboard(ctx context.Context) error {
 	}
 	m := a.manager()
 	defer m.Close()
-	return a.options.Dashboard(ctx, tui.Options{Targets: targets, InitialTarget: initial, ConfigPath: cfg.SourcePath(), Connector: m, Input: a.options.In, Output: a.options.Out, MetricColumns: cfg.TUI.MetricColumns, ParameterColumns: cfg.TUI.ParameterColumns, RefreshSeconds: cfg.TUI.RefreshSeconds, SaveTargets: func(targets []core.Target, defaultID string) error {
+	state := a.state()
+	defer state.Close()
+	var mouse *bool
+	if mouseExplicit {
+		mouse = &a.mouse
+	}
+	return a.options.Dashboard(ctx, tui.Options{State: state, Mouse: mouse, Targets: targets, InitialTarget: initial, ConfigPath: cfg.SourcePath(), Connector: m, Input: a.options.In, Output: a.options.Out, MetricColumns: cfg.TUI.MetricColumns, ParameterColumns: cfg.TUI.ParameterColumns, RefreshSeconds: cfg.TUI.RefreshSeconds, SaveTargets: func(targets []core.Target, defaultID string) error {
 		cfg.Targets = nil
 		for _, target := range targets {
 			if !target.Transient {
@@ -350,4 +360,12 @@ func (a *app) completionCommand() *cobra.Command {
 			return usagef("unknown shell %q", args[0])
 		}
 	}}
+}
+
+// state is deliberately constructed only by a dashboard or explicit local-view operation.
+func (a *app) state() core.StateStore {
+	if a.options.State != nil {
+		return a.options.State
+	}
+	return localstate.New("")
 }

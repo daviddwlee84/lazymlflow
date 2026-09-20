@@ -41,7 +41,13 @@ func (c *Client) proxyURI(uri string) (string, bool, error) {
 			return "", false, err
 		}
 		if u.Host != "" {
-			base.Host = u.Host
+			origin, _ := url.Parse(c.opts.OriginalTrackingURI)
+			if origin == nil || !strings.EqualFold(origin.Host, u.Host) {
+				base.Host = u.Host
+				if origin != nil && origin.Scheme != "" {
+					base.Scheme = origin.Scheme
+				}
+			}
 		}
 		base.Path = path.Join(base.Path, "api/2.0/mlflow-artifacts/artifacts", u.Path)
 		base.RawPath = ""
@@ -49,7 +55,7 @@ func (c *Client) proxyURI(uri string) (string, bool, error) {
 		base.Fragment = ""
 		return strings.TrimRight(base.String(), "/"), true, nil
 	case "http", "https":
-		return strings.TrimRight(uri, "/"), true, nil
+		return strings.TrimRight(c.translateArtifactOrigin(u).String(), "/"), true, nil
 	case "file", "":
 		if !c.opts.Local {
 			return "", false, errors.New("the remote server returned a local artifact path; configure server artifact proxying or use a local target with access to that store")
@@ -58,6 +64,29 @@ func (c *Client) proxyURI(uri string) (string, bool, error) {
 	default:
 		return "", false, nil
 	}
+}
+
+// Absolute artifact URLs pointing at the configured tracking server must use
+// its owned SSH proxy too. Similar hosts and paths outside a configured prefix
+// are deliberately not rewritten and never inherit tracking credentials.
+func (c *Client) translateArtifactOrigin(u *url.URL) *url.URL {
+	origin, err := url.Parse(c.opts.OriginalTrackingURI)
+	if err != nil || origin.Host == "" || !sameOrigin(origin, u) {
+		return u
+	}
+	prefix := strings.TrimRight(origin.Path, "/")
+	if u.Path != prefix && !strings.HasPrefix(u.Path, prefix+"/") {
+		return u
+	}
+	base, err := url.Parse(c.base)
+	if err != nil {
+		return u
+	}
+	copy := *u
+	copy.Scheme, copy.Host = base.Scheme, base.Host
+	copy.Path = strings.TrimRight(base.Path, "/") + strings.TrimPrefix(u.Path, prefix)
+	copy.RawPath = ""
+	return &copy
 }
 
 func (c *Client) ListArtifacts(ctx context.Context, runID, p string) (core.ArtifactPage, error) {

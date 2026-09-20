@@ -27,6 +27,7 @@ type Options struct {
 	Local                     bool
 	ArtifactCLI               func(context.Context, []string) ([]byte, error)
 	ArtifactDestination       string
+	OriginalTrackingURI       string
 }
 type Client struct {
 	base string

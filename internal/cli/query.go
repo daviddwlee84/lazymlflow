@@ -99,15 +99,55 @@ func collectRuns(ctx context.Context, b core.Backend, q core.RunQuery, all bool)
 func (a *app) experimentsCommand() *cobra.Command {
 	group := a.group("experiments", "List and inspect experiments")
 	q := queryFlags{}
+	var useView bool
+	var localVisibility string
 	list := &cobra.Command{Use: "list", Short: "Search experiments on the tracking server", Args: noArgs, Example: `  lazymlflow experiments list --filter "name LIKE 'training%'" --all --json`, RunE: func(cmd *cobra.Command, _ []string) error {
 		view, err := q.validate()
 		if err != nil {
 			return err
 		}
-		return a.session(cmd.Context(), func(s *core.Session) error {
+		if cmd.Flags().Changed("visibility") && !useView {
+			return usagef("--visibility requires --use-view")
+		}
+		target, err := a.resolve()
+		if err != nil {
+			return err
+		}
+		var visibility map[string]core.Visibility
+		if useView {
+			state := a.state()
+			defer state.Close()
+			layout, _, err := state.LoadLayout(cmd.Context())
+			if err != nil {
+				return err
+			}
+			if !cmd.Flags().Changed("visibility") {
+				localVisibility = layout.ExperimentVisibility
+			}
+			if localVisibility == "" {
+				localVisibility = "normal"
+			}
+			if !validLocalVisibility(localVisibility) {
+				return usagef("--visibility must be normal, hidden, archived, or all")
+			}
+			visibility, err = state.ListVisibility(cmd.Context(), core.SourceKey(target))
+			if err != nil {
+				return err
+			}
+		}
+		return a.withSession(cmd.Context(), target, func(s *core.Session) error {
 			page, err := collectExperiments(cmd.Context(), s.Backend, core.ExperimentQuery{Filter: q.filter, OrderBy: q.order, ViewType: view, MaxResults: q.limit, PageToken: q.token}, q.all)
 			if err != nil {
 				return err
+			}
+			if useView {
+				rows := make([]core.Experiment, 0, len(page.Experiments))
+				for _, e := range page.Experiments {
+					if visible(visibility, "experiment", e.ID, localVisibility) {
+						rows = append(rows, e)
+					}
+				}
+				page.Experiments = rows
 			}
 			if a.jsonOutput {
 				return a.output(cmd, page)
@@ -124,6 +164,8 @@ func (a *app) experimentsCommand() *cobra.Command {
 		})
 	}}
 	q.bind(list, []string{"name ASC"})
+	list.Flags().BoolVar(&useView, "use-view", false, "Apply personal hidden/archived experiment visibility")
+	list.Flags().StringVar(&localVisibility, "visibility", "normal", "Local visibility with --use-view: normal, hidden, archived, all")
 	get := &cobra.Command{Use: "get EXPERIMENT_ID", Short: "Get one experiment", Args: exactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		return a.session(cmd.Context(), func(s *core.Session) error {
 			e, err := s.Backend.GetExperiment(cmd.Context(), args[0])
@@ -148,72 +190,22 @@ func (a *app) experimentsCommand() *cobra.Command {
 func (a *app) runsCommand() *cobra.Command {
 	group := a.group("runs", "Search, inspect, and compare runs")
 	q := queryFlags{}
-	var experimentIDs, metrics, params []string
+	var experimentIDs, metrics, params, columns, groupBy []string
+	var useView bool
+	var localVisibility string
 	list := &cobra.Command{Use: "list [EXPERIMENT_ID...]", Short: "Search runs (all experiments when none are specified)", Example: `  lazymlflow runs list 1 2 --filter "metrics.accuracy > 0.9" --order-by "metrics.accuracy DESC" --metrics accuracy,loss --all
   lazymlflow runs list --experiment 1 --json`, RunE: func(cmd *cobra.Command, args []string) error {
-		view, err := q.validate()
-		if err != nil {
-			return err
-		}
-		ids := append(append([]string(nil), experimentIDs...), args...)
-		return a.session(cmd.Context(), func(s *core.Session) error {
-			if len(ids) == 0 {
-				experimentView := "ACTIVE_ONLY"
-				if view != "ACTIVE_ONLY" {
-					experimentView = "ALL"
-				}
-				page, err := collectExperiments(cmd.Context(), s.Backend, core.ExperimentQuery{ViewType: experimentView, MaxResults: 1000}, true)
-				if err != nil {
-					return err
-				}
-				for _, e := range page.Experiments {
-					ids = append(ids, e.ID)
-				}
-			}
-			page := core.RunPage{Runs: []core.Run{}}
-			if len(ids) > 0 {
-				var err error
-				page, err = collectRuns(cmd.Context(), s.Backend, core.RunQuery{ExperimentIDs: unique(ids), Filter: q.filter, OrderBy: q.order, ViewType: view, MaxResults: q.limit, PageToken: q.token}, q.all)
-				if err != nil {
-					return err
-				}
-			}
-			if a.jsonOutput {
-				return a.output(cmd, page)
-			}
-			w := table(cmd.OutOrStdout())
-			fmt.Fprint(w, "RUN ID\tNAME\tEXPERIMENT\tSTATUS\tSTARTED")
-			for _, key := range metrics {
-				fmt.Fprintf(w, "\t%s", cell(key))
-			}
-			for _, key := range params {
-				fmt.Fprintf(w, "\tparam:%s", cell(key))
-			}
-			fmt.Fprintln(w)
-			for _, r := range page.Runs {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s", cell(r.ID()), cell(r.Name()), cell(r.Info.ExperimentID), cell(r.Info.Status), timestamp(r.Info.StartTime))
-				for _, key := range metrics {
-					value := "—"
-					if metric, ok := r.Metric(key); ok {
-						value = metric.String()
-					}
-					fmt.Fprintf(w, "\t%s", value)
-				}
-				for _, key := range params {
-					fmt.Fprintf(w, "\t%s", cell(lookup(r.Data.Params, key)))
-				}
-				fmt.Fprintln(w)
-			}
-			if err := w.Flush(); err != nil {
-				return err
-			}
-			return pageHint(cmd, page.NextPageToken)
-		})
+		return a.listRuns(cmd, q, unique(append(append([]string(nil), experimentIDs...), args...)), metrics, params, columns, groupBy, useView, localVisibility)
+
 	}}
 	q.bind(list, []string{"attributes.start_time DESC"})
 	list.Flags().StringSliceVar(&experimentIDs, "experiment", nil, "Experiment ID; repeat or use comma-separated IDs")
 	list.Flags().StringSliceVar(&metrics, "metrics", nil, "Metric columns in the text table")
 	list.Flags().StringSliceVar(&params, "params", nil, "Parameter columns in the text table")
+	list.Flags().StringArrayVar(&columns, "column", nil, "Display exact attribute/metric/param/tag/dataset field, e.g. metric:loss; repeat")
+	list.Flags().StringArrayVar(&groupBy, "group-by", nil, "Group loaded runs by exact parameter key; repeat")
+	list.Flags().BoolVar(&useView, "use-view", false, "Apply the saved local view (requires one explicit experiment)")
+	list.Flags().StringVar(&localVisibility, "visibility", "normal", "Override local visibility with --use-view: normal, hidden, archived, all")
 	get := &cobra.Command{Use: "get RUN_ID", Short: "Inspect a run, including latest metrics, parameters, and tags", Args: exactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		return a.session(cmd.Context(), func(s *core.Session) error {
 			r, err := s.Backend.GetRun(cmd.Context(), args[0])

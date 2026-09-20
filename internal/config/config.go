@@ -99,6 +99,7 @@ func (c *Config) SourcePath() string { return c.path }
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 var version = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+([A-Za-z0-9.+-]*)$`)
+var sshHost = regexp.MustCompile(`^[A-Za-z0-9\[][A-Za-z0-9._@:\[\]-]*$`)
 
 func (c *Config) Validate() error {
 	if c.TUI.RefreshSeconds < 0 {
@@ -128,6 +129,14 @@ func NormalizeTarget(t core.Target, baseDir string) (core.Target, error) {
 	}
 	if strings.TrimSpace(t.TrackingURI) == "" {
 		return t, errors.New("tracking_uri is required")
+	}
+	if t.SSHHost != "" {
+		if !sshHost.MatchString(t.SSHHost) {
+			return t, errors.New("ssh_host must be an OpenSSH host alias or hostname without options or whitespace")
+		}
+		if !strings.HasPrefix(t.TrackingURI, "http://") && !strings.HasPrefix(t.TrackingURI, "https://") {
+			return t, errors.New("ssh_host requires an HTTP(S) tracking_uri reachable from the SSH host; local stores cannot use SSH")
+		}
 	}
 	if baseDir == "" {
 		var err error
