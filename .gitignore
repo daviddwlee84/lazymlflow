@@ -36,3 +36,9 @@
 *.local
 .direnv/
 # <<< dev gitignore <<<
+
+/bin/
+__pycache__/
+.pytest_cache/
+*.test
+/coverage.out

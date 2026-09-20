@@ -1,0 +1,43 @@
+name: Test
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  go:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+      - run: go build -o bin/lazymlflow ./cmd/lazymlflow
+      - run: python3 scripts/pty_smoke.py --binary ./bin/lazymlflow
+  mlflow:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mlflow: ['2.22.0', '3.12.0', '3.16.1']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: astral-sh/setup-uv@v6
+      - run: go build -o bin/lazymlflow ./cmd/lazymlflow
+      - run: uv run --no-project --python 3.12 --with 'mlflow==${{ matrix.mlflow }}' python scripts/integration_mlflow.py
+  artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: astral-sh/setup-uv@v6
+      - run: go build -o bin/lazymlflow ./cmd/lazymlflow
+      - run: uv run --no-project --python 3.12 --with mlflow==3.16.1 --with boto3 python scripts/integration_s3.py
