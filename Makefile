@@ -7,3 +7,4 @@ check:
 	go vet ./...
 pty: build
 	python3 scripts/pty_smoke.py --binary ./bin/lazymlflow
+	python3 scripts/pty_inspection.py --binary ./bin/lazymlflow

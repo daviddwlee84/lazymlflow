@@ -93,6 +93,9 @@ func listStart(index, count, capacity int) int {
 }
 
 func (m *model) View() tea.View {
+	if v, ok := m.workspaceView(); ok {
+		return v
+	}
 	w, h := max(1, m.width), max(1, m.height)
 	if h < 5 || w < 16 {
 		v := tea.NewView(block([]string{"lazymlflow", "Resize terminal", "q quit"}, w, h))
@@ -205,12 +208,18 @@ func (m *model) contextLine() string {
 	if m.downloadPending {
 		return "Download pending · Ctrl+X cancel · q exits and cancels"
 	}
+	if m.focus == 2 && m.isInspectionTab() {
+		return "N notes · S summary · B datasets · 1/2/3 pane · [/] tabs · z zoom · ? help · q quit"
+	}
 	if m.focus == 1 && !m.compare {
-		return "1/2/3 pane · z zoom · Ctrl+W resize · M mouse · [/] pan columns · ? help · q quit"
+		return "N notes · S summary · B datasets · 1/2/3 pane · z zoom · Ctrl+W resize · M mouse · [/] pan columns · ? help · q quit"
 	}
 	return "↑↓/jk move · Tab/Shift+Tab focus · ←→/hl context · gg/G first/last · ? help · q quit"
 }
 func (m *model) footer() string {
+	if v := m.inspectionFooter(); v != "" {
+		return v
+	}
 	if m.targetForm != nil {
 		return "Tab / Enter next · Shift+Tab previous · Esc back/cancel · Ctrl+C cancel form"
 	}
@@ -239,7 +248,7 @@ func (m *model) footer() string {
 			return "↑↓/jk scroll · Enter choose · Esc back"
 		}
 	}
-	priorities := []string{"targets", "local", "filter", "sort", "basket", "compare", "columns", "history", "chart", "axis", "diff", "download", "open", "copy", "refresh"}
+	priorities := []string{"targets", "local", "filter", "sort", "basket", "compare", "columns", "history", "chart", "axis", "diff", "download", "open", "copy", "refresh", "journal", "summary", "dataset-workspace"}
 	available := m.actions()
 	var out []string
 	for _, id := range priorities {
@@ -266,6 +275,9 @@ func (m *model) detailTitle() string {
 	return strings.Join(tabs, " ")
 }
 func (m *model) detailLines(w, h int) []string {
+	if m.isInspectionTab() && m.inspectionView() != nil {
+		return m.inspectionContent(w, h).Lines
+	}
 	r := m.run()
 	if r == nil {
 		return []string{"Choose a run to inspect."}
@@ -331,6 +343,9 @@ func (m *model) detailLines(w, h int) []string {
 	return lines[start:]
 }
 func (m *model) overlayView(w, h int) string {
+	if v, ok := m.inspectionOverlay(w, h); ok {
+		return v
+	}
 	if m.isPicker() {
 		return m.pickerView(w, h)
 	}
@@ -513,6 +528,11 @@ func historySeries(run core.Run, history []core.Metric, elapsed bool) plotSeries
 	return s
 }
 func (m *model) chartLines(w, h int) []string {
+	if m.inspect != nil {
+		if entries := m.chartEntries(m.inspectionView()); len(entries) > 0 {
+			return m.curveContent(m.inspectionView(), entries, w, h, true).Lines
+		}
+	}
 	s := m.state()
 	if s == nil {
 		return nil

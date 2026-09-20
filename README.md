@@ -2,7 +2,8 @@
 
 A keyboard-driven Go CLI/TUI for browsing MLflow experiments, comparing runs,
 and downloading artifacts, with mouse navigation, resizable panes, per-experiment
-views, nested runs and parameter groups. Remote tracking uses the public REST API. Local
+views, nested runs, dataset/feature inspection, local Markdown notes, and
+evidence-based summaries and reusable prompts. Remote tracking uses the public REST API. Local
 `mlruns` and SQLite targets run an owned, temporary **official MLflow server**;
 lazymlflow does not implement MLflow's storage format or database schema.
 
@@ -19,7 +20,7 @@ go build -o bin/lazymlflow ./cmd/lazymlflow
 Install from a checkout with `go install ./cmd/lazymlflow`. The main-package
 install path is `github.com/daviddwlee84/lazymlflow/cmd/lazymlflow`; no published
 release is required to build this checkout. Build a versioned binary with
-`go build -ldflags '-X main.version=0.1.0' -o bin/lazymlflow ./cmd/lazymlflow`.
+`go build -ldflags '-X main.version=0.3.0' -o bin/lazymlflow ./cmd/lazymlflow`.
 
 Remote metadata and proxied artifacts need only the Go binary. Local stores and
 direct cloud artifact access require either [uv](https://docs.astral.sh/uv/)
@@ -146,6 +147,7 @@ local visibility choices persist across launches.
 | `a` in chart | Switch step / elapsed-time axis |
 | `[` / `]` | Change details tab |
 | `P` | Inspect a parent run that is outside the loaded results |
+| `B` / `N` / `S` | Dataset workspace / local journal / summary and prompt |
 | `d` / `D` / Ctrl+X | Download selection / current directory / cancel download |
 | `o` / `y` | Open selected resource in browser / copy full ID or path |
 | `?` / `:` | Context help / action menu |
@@ -206,7 +208,9 @@ Personal state is separate from every MLflow backend:
 `$XDG_DATA_HOME/lazymlflow/state.db`, falling back to
 `~/.local/share/lazymlflow/state.db`. It uses pure-Go SQLite (no CGo/Python),
 transactional versioned setup and bounded lock waits. It contains preferences
-and visibility entries, not a replica of runs, metrics or credentials.
+and visibility entries plus local journal notes, not a replica of runs, metrics or
+credentials. Local schema version 2 adds notes transactionally while preserving
+version-1 views and visibility; it does not change any MLflow database.
 
 Hidden/archived items are excluded from the normal view; `V` shows hidden,
 archived or all items and `U` restores them. These actions never modify MLflow
@@ -230,6 +234,130 @@ These local view commands work without connecting to MLflow. Ordinary CLI
 queries retain their raw server behavior; `--use-view` explicitly applies
 personal settings. Saved run views require one explicit experiment. Local
 sorting never silently loads all pages: use `--all` for a complete matching set.
+
+## Detailed inspection and metric histories
+
+Metrics, Parameters and Tags are searchable, sortable tables. In the detail
+pane, `/` searches the current table, `s` sorts, Enter opens the complete value
+or metric curve, and `Y` copies that value (`y` still copies the run ID).
+Selection, search and scroll survive switching tabs. Use `z` for more space.
+
+The Metrics tab starts with model metrics; `e` cycles model/system/all. `v`
+switches between table and dashboard, `p` overlays up to four selected metrics,
+`m` picks a metric, and `a` switches step/elapsed-time axes. In an expanded
+curve, Left/Right or `h/l` moves the sample cursor. First/last finite values,
+minimum, maximum, sample counts, non-finite counts, step and timestamp ranges
+are derived from the full history; server latest stays separate. Repeated steps
+remain distinct and non-finite values create gaps. Curves use Braille with an
+ASCII fallback (`u`). `R` toggles automatic metric refresh; it is off by default.
+It uses `tui.refresh_seconds`, or five seconds when enabled without a configured
+interval. Completed runs receive one final refresh; automatic mode stays enabled
+and resumes when another running run is selected.
+Background history loading is bounded, cancelable and isolated by source/run/key;
+a failed refresh retains the prior usable history with its error.
+
+The Datasets tab shows every logged input. `{` / `}` changes input, `/` searches
+features, Space expands nested fields, Enter opens complete field details, and
+`v` switches table/raw JSON. Tabular columns/leaves, logged profile row counts,
+and tensor rank/shape/known dimensions are reported separately; a parameter such
+as `feature_dim` is a logged parameter, not proof of the dataset's schema.
+Malformed or missing schemas remain inspectable as raw data. Dataset files are
+not opened to infer unlogged values.
+
+## Dataset workspace
+
+`B` opens Datasets → Related runs → Schema/Metadata/Notes within the current
+target. It initially uses loaded runs and labels that scope. `A` explicitly scans
+all accessible experiments/pages; Ctrl+X cancels while retaining partial results.
+Progress, errors, completeness and lifecycle scope stay visible. `V` changes
+active/all/deleted lifecycle; `H` includes locally hidden/archived relationships.
+`/` searches the focused pane, `h/l` folds dataset names, Enter inspects a variant
+or opens a related run, and `[`/`]` changes detail tabs. The usual pane focus,
+zoom, resize and mouse controls remain available; `B` or Esc returns.
+
+Variants combine the configured source, dataset name/digest, source type,
+canonical source and schema. The same name alone does not establish identity.
+Per-run context/profile are preserved as relationships, so training/test uses
+of the same variant remain visible. A catalog is a metadata view, not a new
+dataset registry or persistent copy of remote datasets.
+
+```sh
+lazymlflow datasets list --all --json
+lazymlflow datasets list --experiment 11 --view all
+lazymlflow datasets schema RUN_ID --index 1 --json
+lazymlflow datasets runs RUN_ID --index 1 --experiment 11
+```
+
+Dataset input indexes are one-based. `datasets runs` uses the selected input as
+a seed and finds the exact variant across the selected experiments (the whole
+target by default). JSON includes scan scope/completeness and partial errors.
+
+## Local journal
+
+`N` opens notes for the selected experiment, run or dataset. Use `c` to compose,
+`e` to edit, `/` to search, `y` to copy, `d` to soft-delete, `D` to include deleted
+notes, and `u` to restore. The multiline editor saves with Ctrl+S. Ctrl+E hands
+its draft to `$VISUAL`, then `$EDITOR`, then `vi`; returning does not save until
+Ctrl+S. Unsaved changes require an explicit save/discard choice. Conflicting
+revisions retain the draft rather than overwrite a newer note.
+
+```sh
+lazymlflow notes add --run RUN_ID --file - < observation.md
+lazymlflow notes list --run RUN_ID --json
+lazymlflow notes edit NOTE_ID --run RUN_ID --revision 1 --body 'Updated finding'
+lazymlflow notes delete NOTE_ID --run RUN_ID --revision 2
+lazymlflow notes restore NOTE_ID --run RUN_ID --revision 3
+lazymlflow notes add --experiment 11 --body 'Experiment-level observation'
+lazymlflow notes list --dataset-run RUN_ID --index 1
+```
+
+`--dataset DATASET_ID` uses the identity from `datasets list/schema` without
+connecting; `--dataset-run` resolves it from a live run. Ordinary run/experiment
+notes also work without connecting. Notes stay in local `state.db`, scoped to
+source and entity identity; they do not modify MLflow tags. Editing, deleting
+and restoring require the current revision from `notes list --json`.
+
+## Summaries and reusable prompts
+
+`S` collects a summary for the selected run/experiment, or the comparison's run
+set. In the preview, `p` switches Markdown/prompt, `y` copies, `e` exports to a
+new file, and `n` saves the report through the local note editor. Existing export
+files are preserved. Ctrl+X cancels collection; nothing launches an agent.
+
+```sh
+lazymlflow runs summary RUN_ID --metric loss --history sampled > run.md
+lazymlflow runs summary RUN_A RUN_B --history full --json > comparison.json
+lazymlflow experiments summary 11 --filter 'metrics.loss < 0.4' \
+  --detail-limit 20 > experiment.md
+lazymlflow prompt list --json
+lazymlflow prompt render run-summary RUN_ID > prompt.md
+lazymlflow prompt render compare-runs RUN_A RUN_B --metric loss
+lazymlflow prompt render experiment-summary 11 --all-details
+```
+
+Summaries default to Markdown; `--json` returns version-1 evidence. A snapshot
+contains the configured origin without target authentication settings, complete
+latest metrics/parameters/tags and logged dataset schema/profile, selected
+histories, root artifact entries and active local notes. Artifact contents are
+not fetched. `--metric` is repeatable and preserves exact keys. Automatic history
+selection excludes `system/` unless `--include-system` is set; explicitly chosen
+system keys are honored. `--history none|sampled|full` defaults to sampled with
+up to 200 retained points per metric. Statistics always use the full retrieved
+history and sampling/completeness are explicit.
+
+Experiment summaries scan **all matching metadata pages**, then retrieve details
+for the first 20 runs in server order (start time descending by default).
+`--filter`, `--order-by`, `--view`, `--detail-limit` and `--all-details` control
+that scope; metadata-only runs are not presented as if their histories were
+inspected. Required metadata failures fail the command; unavailable optional
+histories/artifacts/notes remain explicit warnings. Collection uses at most four
+concurrent I/O operations and responds to cancellation.
+
+The report and prompt render the same captured context. Prompts separate observed
+facts, inference and unknowns and treat all logged strings/local notes as data.
+They do not assume metric direction, convergence, causality or model quality.
+With `--json`, prompt rendering returns the recipe ID, context version and text;
+rendering does not contact a model provider or execute the generated prompt.
 
 ## CLI
 
@@ -263,7 +391,7 @@ use `open --print --json`.
 
 Local stores must already exist. SQLite is opened read-only, including the
 registry connection: incompatible schemas fail with a runtime-selection hint.
-lazymlflow never runs database migrations. Legacy FileStore uses MLflow's
+lazymlflow never runs MLflow database migrations. Legacy FileStore uses MLflow's
 compatibility setting; the official runtime may create its `.trash`/`models`
 administrative directories. The app exposes no tracking write commands; the
 original MLflow web UI has its own controls.
@@ -288,9 +416,34 @@ Starting a server does not relocate or rewrite recorded artifact URIs.
 beside the destination and publish only on success. Existing destinations need
 explicit `--overwrite`; canceled/failed transfers preserve them. Local files,
 proxy artifacts and S3/MinIO are the first-version provider scope; other MLflow
-providers can be supplied through a configured environment. Dataset/logged-model
-comparison, registry management and Databricks-specific behavior are outside
-this version.
+providers can be supplied through a configured environment. Model Registry,
+GenAI tracing, Databricks-specific behavior and cross-target comparisons remain
+outside this version.
+
+## Migration research boundary
+
+No tracking-store migration or cross-server import command is implemented.
+Local preferences/notes remain keyed by source plus entity identity; changing a
+server does not automatically merge or reassign journals.
+
+As reviewed on 2026-09-20:
+
+- MLflow's official [`migrate-filestore`](https://mlflow.org/docs/latest/self-hosting/migrate-from-file-store/)
+  requires MLflow 3.10+ and migrates FileStore metadata to an empty SQLite target.
+  It preserves existing IDs/timestamps; artifacts keep their original URIs and
+  are not copied. This is separate from merging two tracking servers.
+- [User-specified run IDs, issue #12780](https://github.com/mlflow/mlflow/issues/12780)
+  remains an open request. Server-to-server export/import creates destination IDs;
+  any future journal transfer would need an explicit source-to-destination mapping.
+- A complete PostgreSQL dump/restore into an empty compatible deployment can
+  preserve stored identifiers—an engineering inference from PostgreSQL's
+  [logical backup semantics](https://www.postgresql.org/docs/current/backup-dump.html),
+  not a supported merge strategy. Artifact storage is a separate transfer concern.
+- [`mlflow-export-import`](https://github.com/mlflow/mlflow-export-import)
+  supports server transfers, but its model-input import issue
+  [#250](https://github.com/mlflow/mlflow-export-import/issues/250) and proposed fix
+  [#251](https://github.com/mlflow/mlflow-export-import/pull/251) were still open.
+  No migration or fix from those projects was applied here.
 
 ## Development and verification
 
@@ -299,6 +452,7 @@ go vet ./...
 go test -race ./...
 go build -o bin/lazymlflow ./cmd/lazymlflow
 python3 scripts/pty_smoke.py --binary ./bin/lazymlflow
+python3 scripts/pty_inspection.py --binary ./bin/lazymlflow
 uv run --no-project --with mlflow==3.16.1 python scripts/integration_mlflow.py
 uv run --no-project --with mlflow==3.16.1 --with boto3 python scripts/integration_s3.py
 ```

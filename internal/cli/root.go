@@ -170,7 +170,7 @@ func NewRoot(options Options) *cobra.Command {
 		}
 		return a.dashboard(cmd.Context(), cmd.Flags().Changed("mouse"))
 	}
-	root.AddCommand(a.targetsCommand(), a.experimentsCommand(), a.runsCommand(), a.metricsCommand(), a.artifactsCommand(), a.openCommand(), a.configCommand(), a.doctorCommand(), a.viewCommand())
+	root.AddCommand(a.targetsCommand(), a.experimentsCommand(), a.runsCommand(), a.metricsCommand(), a.artifactsCommand(), a.openCommand(), a.configCommand(), a.doctorCommand(), a.viewCommand(), a.datasetsCommand(), a.notesCommand(), a.promptCommand())
 	root.AddCommand(&cobra.Command{Use: "version", Short: "Print the build version", Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if a.jsonOutput {
 			return a.output(cmd, map[string]string{"version": options.Version})

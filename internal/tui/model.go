@@ -105,6 +105,8 @@ type targetState struct {
 }
 
 type model struct {
+	work                                    *workspaceState
+	inspect                                 *inspectionState
 	ctx                                     context.Context
 	opts                                    Options
 	targets                                 []core.Target
@@ -169,13 +171,15 @@ func newModel(ctx context.Context, o Options) *model {
 	if len(m.targets) == 0 {
 		m.status = "No targets configured. Press t then a to add a tracking server or local store."
 	}
+	m.initWorkspace()
+	m.initInspection()
 	return m
 }
 func newTargetState() *targetState {
 	return &targetState{Visibility: map[string]core.Visibility{}, VisibilityTouched: map[string]bool{}, Runs: map[string]*runState{}, Artifacts: map[string]*artifactState{}, Basket: map[string]core.Run{}, Histories: map[string][]core.Metric{}, HistoryErrors: map[string]string{}}
 }
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.connect(), m.tick(), m.loadLayout(), m.loadVisibility())
+	return tea.Batch(m.connect(), m.tick(), m.inspectionTick(), m.loadLayout(), m.loadVisibility())
 }
 func (m *model) tick() tea.Cmd {
 	if m.opts.RefreshSeconds <= 0 {
@@ -248,6 +252,7 @@ func (m *model) operation(name string) (context.Context, uint64) {
 	return ctx, m.seq
 }
 func (m *model) stopAll() {
+	m.stopInspection()
 	m.seq++
 	m.downloadGen = m.seq
 	m.downloadPending = false
@@ -283,6 +288,13 @@ func (m *model) stopAll() {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	defer m.refreshRowCache()
+	defer m.syncInspection()
+	if cmd, handled := m.updateWorkspace(msg); handled {
+		return m, cmd
+	}
+	if cmd, handled := m.updateInspection(msg); handled {
+		return m, cmd
+	}
 	switch v := msg.(type) {
 	case layoutLoadedMsg:
 		before := m.selectedExperiment()
@@ -321,8 +333,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.targetForm != nil {
 			return m, m.updateTargetForm(v)
 		}
-		return m, nil
+		return m, m.ensureHistories(false)
 	case refreshMsg:
+		if m.focus == 2 && m.tab == 1 || m.compare && m.chart {
+			return m, m.tick()
+		}
 		if m.inputMode != "" || m.overlay != "" || m.targetForm != nil {
 			return m, m.tick()
 		}
@@ -443,13 +458,14 @@ type action struct {
 
 func act(id, keys, label string) action { return action{id, strings.Split(keys, "|"), label} }
 func (m *model) actions() []action {
-	a := []action{act("quit", "q", "Quit"), act("help", "?", "Help"), act("palette", ":", "Actions"), act("targets", "t", "Switch target"), act("refresh", "r", "Refresh"), act("up", "up|k", "Move up"), act("down", "down|j", "Move down"), act("first", "home", "First row (also gg)"), act("last", "end|G", "Last row"), act("back", "esc", "Back / cancel"), act("nextpane", "tab", "Next pane"), act("prevpane", "shift+tab", "Previous pane"), act("left", "left|h", "Previous pane / parent / pan left"), act("right", "right|l", "Next pane / enter / pan right"), act("enter", "enter", "Inspect selection")}
+	a := append(m.workspaceActions(), m.inspectionActions()...)
+	a = append(a, []action{act("quit", "q", "Quit"), act("help", "?", "Help"), act("palette", ":", "Actions"), act("targets", "t", "Switch target"), act("refresh", "r", "Refresh"), act("up", "up|k", "Move up"), act("down", "down|j", "Move down"), act("first", "home", "First row (also gg)"), act("last", "end|G", "Last row"), act("back", "esc", "Back / cancel"), act("nextpane", "tab", "Next pane"), act("prevpane", "shift+tab", "Previous pane"), act("left", "left|h", "Previous pane / parent / pan left"), act("right", "right|l", "Next pane / enter / pan right"), act("enter", "enter", "Inspect selection")}...)
 	a = append(a, act("pane1", "1", "Focus experiments"), act("pane2", "2", "Focus runs"), act("pane3", "3", "Focus details"), act("zoom", "z", "Zoom / restore pane"), act("resize", "ctrl+w", "Resize panes"), act("mouse", "M", "Toggle mouse capture"), act("layout", "L", "Layout options"))
 	if m.focus == 0 {
 		a = append(a, act("info", "i", "Full experiment information"))
 	}
 	if m.compare {
-		a = append(a, act("compare", "c", "Close comparison"), act("diff", "x", "Only differences"), act("history", "m", "Choose history metric"), act("chart", "v", "Toggle table / history chart"), act("axis", "a", "Toggle step / elapsed time"))
+		a = append(a, act("compare", "c", "Close comparison"), act("diff", "x", "Only differences"), act("chart", "v", "Toggle table / history chart"), act("axis", "a", "Toggle step / elapsed time"))
 		return a
 	}
 	if m.focus < 2 {
@@ -482,7 +498,7 @@ func (m *model) actions() []action {
 			a = append(a, act("download", "d", "Download artifact / directory"), act("download-current", "D", "Download current directory"))
 		}
 		if m.tab == 1 && m.run() != nil {
-			a = append(a, act("history", "m", "Metric history"), act("axis", "a", "Toggle step / elapsed time"), act("chart", "v", "Toggle metric values / history chart"))
+			a = append(a, act("axis", "a", "Toggle step / elapsed time"))
 		}
 	}
 	if m.downloadPending {
@@ -492,6 +508,13 @@ func (m *model) actions() []action {
 }
 
 func (m *model) perform(id string) tea.Cmd {
+	m.syncInspection()
+	if cmd, ok := m.performWorkspace(id); ok {
+		return cmd
+	}
+	if cmd, ok := m.performInspection(id); ok {
+		return cmd
+	}
 	switch id {
 	case "pane1", "pane2", "pane3":
 		m.focus = int(id[len(id)-1] - '1')
@@ -731,7 +754,7 @@ func (m *model) perform(id string) tea.Cmd {
 	case "chart":
 		m.chart = !m.chart
 		if m.chart && m.metric == "" {
-			return m.perform("history")
+			return m.perform("inspect-metric")
 		}
 		if m.chart {
 			return m.loadHistory()
@@ -879,7 +902,7 @@ func (m *model) experimentsVisible() []core.Experiment {
 			out = append(out, e)
 		}
 	}
-	return out
+	return m.catalogInspectionExperiments(out)
 }
 func (m *model) runsVisible() []core.Run {
 	r := m.runs()
@@ -929,6 +952,9 @@ func (m *model) selectRun(index int) {
 	m.detailOffset = 0
 }
 func (m *model) move(delta int) tea.Cmd {
+	if !m.compare && m.focus == 2 && m.isInspectionTab() {
+		return m.moveInspection(delta)
+	}
 	if m.compare {
 		m.compareOffset = clamp(m.compareOffset+delta, 0, max(0, len(comparisonRows(m.selectedRuns(), m.differences))-1))
 		return nil
@@ -975,6 +1001,13 @@ func (m *model) move(delta int) tea.Cmd {
 	return nil
 }
 func (m *model) ensureDetails() tea.Cmd {
+	m.syncInspection()
+	if m.tab != 1 {
+		m.cancelUnusedHistories()
+	}
+	if m.tab == 1 {
+		return m.ensureHistories(false)
+	}
 	if m.tab == 4 && m.run() != nil {
 		a := m.artifacts()
 		if a == nil || a.Gen == 0 {

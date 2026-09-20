@@ -123,6 +123,9 @@ func (m *model) acceptConnected(v connectedMsg) tea.Cmd {
 	return tea.Batch(m.loadExperiments(false), m.loadVisibility())
 }
 func (m *model) refresh() tea.Cmd {
+	if m.inspect != nil && ((m.focus == 2 && m.tab == 1 && m.run() != nil) || (m.compare && m.chart)) {
+		return m.refreshInspection()
+	}
 	s := m.state()
 	if s == nil {
 		return nil
@@ -231,6 +234,7 @@ func (m *model) loadRuns(more bool) tea.Cmd {
 	r.Pending = true
 	r.Err = ""
 	if !more {
+		m.clearCatalogInspection()
 		r.LoadingAll = false
 		r.Next = ""
 		r.SeenPageTokens = map[string]bool{}
@@ -440,28 +444,7 @@ func (m *model) metricKeys() []string {
 	return keys
 }
 func (m *model) loadHistory() tea.Cmd {
-	s := m.state()
-	if s == nil || s.Session == nil || m.metric == "" {
-		return nil
-	}
-	ctx, g := m.operation("history")
-	s.HistoryGen = g
-	s.HistoryPending = true
-	target, b, metric, runs := m.active, s.Session.Backend, m.metric, m.selectedRuns()
-	return func() tea.Msg {
-		histories := map[string][]core.Metric{}
-		errs := map[string]string{}
-		for _, r := range runs {
-			key := r.ID() + "\x00" + metric
-			h, err := b.MetricHistory(ctx, r.ID(), metric)
-			if err != nil {
-				errs[key] = err.Error()
-			} else {
-				histories[key] = h
-			}
-		}
-		return historyMsg{target, g, histories, errs}
-	}
+	return m.ensureHistories(true)
 }
 func (m *model) acceptHistory(v historyMsg) tea.Cmd {
 	s := m.states[v.target]

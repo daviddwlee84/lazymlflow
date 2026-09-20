@@ -1,4 +1,5 @@
-// Package localstate stores personal presentation preferences, never MLflow data.
+// Package localstate stores personal presentation preferences and journal notes,
+// never remote MLflow data or connection credentials.
 package localstate
 
 import (
@@ -18,7 +19,7 @@ import (
 	"modernc.org/sqlite"
 )
 
-const schemaVersion = 1
+const schemaVersion = 2
 const busyBudget = 2 * time.Second
 
 // Store opens lazily. Reading a missing store does not create directories/files.
@@ -177,6 +178,18 @@ func migrate(ctx context.Context, db *sql.DB) error {
 				`CREATE TABLE preferences (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)`,
 				`CREATE TABLE visibility (source TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('experiment','run')), id TEXT NOT NULL, value TEXT NOT NULL CHECK(value IN ('hidden','archived')), PRIMARY KEY(source,kind,id))`,
 				`PRAGMA user_version=1`,
+			} {
+				if _, err := tx.ExecContext(ctx, statement); err != nil {
+					return err
+				}
+			}
+			version = 1
+		}
+		if version == 1 {
+			for _, statement := range []string{
+				`CREATE TABLE notes (id TEXT PRIMARY KEY NOT NULL, source TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('run','experiment','dataset')), subject_id TEXT NOT NULL, label TEXT NOT NULL, body TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted_at INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL CHECK(revision > 0))`,
+				`CREATE INDEX notes_subject ON notes(source,kind,subject_id,created_at,id)`,
+				`PRAGMA user_version=2`,
 			} {
 				if _, err := tx.ExecContext(ctx, statement); err != nil {
 					return err

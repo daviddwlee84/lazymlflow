@@ -183,7 +183,7 @@ func (a *app) experimentsCommand() *cobra.Command {
 			return w.Flush()
 		})
 	}}
-	group.AddCommand(list, get)
+	group.AddCommand(list, get, a.experimentsSummaryCommand())
 	return group
 }
 
@@ -266,7 +266,7 @@ func (a *app) runsCommand() *cobra.Command {
 		})
 	}}
 	compare.Flags().BoolVar(&differences, "differences", false, "Show only fields whose values differ")
-	group.AddCommand(list, get, compare)
+	group.AddCommand(list, get, compare, a.runsSummaryCommand())
 	return group
 }
 

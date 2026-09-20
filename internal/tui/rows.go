@@ -26,7 +26,7 @@ func (m *model) rowCacheKey() string {
 	}
 	view, _ := json.Marshal(semanticView)
 	visibility, _ := json.Marshal(m.state().Visibility)
-	return fmt.Sprintf("%p/%d/%d/%s/%s/%s", r.Rows, len(r.Rows), r.RowsVersion, r.Local, view, visibility)
+	return fmt.Sprintf("%p/%d/%d/%s/%s/%s/%s", r.Rows, len(r.Rows), r.RowsVersion, r.Local, view, visibility, m.catalogInspectionKey())
 }
 func (m *model) buildRunRows() []core.RunRow {
 	r := m.runs()
@@ -44,7 +44,7 @@ func (m *model) buildRunRows() []core.RunRow {
 			}
 		}
 	}
-	return core.BuildRunRows(rows, r.View, m.state().Visibility)
+	return m.catalogInspectionRows(core.BuildRunRows(rows, r.View, m.state().Visibility))
 }
 func (m *model) refreshRowCache() {
 	r := m.runs()

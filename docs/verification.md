@@ -2,7 +2,65 @@
 
 Verified on 2026-09-20. Automated fixtures use disposable configuration, stores,
 credentials and artifact destinations; authorized read-only checks against an
-existing server are called out in the v0.2 record below.
+existing server are called out separately below.
+
+## v0.3 inspection, journal and summaries
+
+The following checks completed on 2026-09-20 with disposable local configuration
+and XDG state directories:
+
+- macOS arm64: full `go vet ./...`, `go test -race ./...`, and both real PTY
+  scripts passed. Native Linux arm64 with **Go 1.25.0** passed full vet/race,
+  native build, `pty_smoke.py` and `pty_inspection.py` in the cached test image.
+  The Linux container had no external network, read-only source/module mounts,
+  and isolated HOME/XDG directories; its container/toolchain snapshot was removed.
+- v0.3 real PTY: expanded curves and sample cursor (keyboard/mouse), overlays,
+  automatic refresh through run completion, a 146-column schema search,
+  floating local note composition and external-editor handoff, cross-experiment
+  dataset scan/relationships, and shared summary/prompt/export. Terminal and
+  temporary-file cleanup passed along with the existing v0.2 interaction flows.
+- `internal/core`, `internal/localstate`, `internal/inspection` and `internal/cli`:
+  vet and race tests passed for schema/dataset contracts, local journal behavior,
+  evidence collection and the CLI commands.
+- Summary contexts: complete latest metrics and raw schema/profile, exact metric
+  keys, model/system selection, local run/dataset/experiment notes, immutable
+  copies and versioned JSON. A 1,000-point fixture verified full-history statistics
+  with a 200-point retained sample, extrema and non-finite values; full/none modes
+  and cancellation were also checked.
+- Experiment summaries: complete multi-page metadata scans, default first-20
+  details, `--all-details`, filter/order/lifecycle propagation, repeated-page
+  rejection, required metadata errors and explicit optional-section warnings.
+  Collection never exceeded four concurrent operations in the controlled fixture.
+- Final experiment-overview regression: 27 metadata rows with only 20 detailed
+  runs. Status totals, metric logged/missing/finite/non-finite coverage and latest
+  ranges, parameter distinct values, and dataset-variant/context usage included
+  fields present only in the final seven rows. Repeated dataset inputs did not
+  inflate run counts; empty parameters remained distinct from missing values.
+- Numeric history observations use complete finite history for last-minus-first,
+  last-minus-minimum and last-minus-maximum, with step/timestamp references. Tests
+  covered a one-point display sample, finite zero, all non-finite history and
+  floating-point overflow without emitting an unsupported finite difference.
+  These final report additions passed focused inspection/CLI vet and race tests.
+- Markdown/prompt rendering: deterministic output for a captured snapshot,
+  distinct latest/history statistics, no terminal escape sequences, safely quoted
+  external strings, and explicit observed-fact/inference/unknown instructions.
+  Prompt listing did not load configuration or connect; rendering did not launch
+  an agent, browser or artifact download.
+- Existing MLflow 3.6.0, read-only: a complete one-run experiment summary plus a
+  run with 17 latest metrics and one dataset. The selected metric yielded six
+  history points with zero collection warnings. JSON, Markdown and reusable
+  prompt output succeeded; temporary binaries, configuration and state were removed.
+- A further read-only check on the requested MLflow 3.6.0 run confirmed 146 logged
+  schema columns and 18 points each for `train_loss`, `valid_loss` and `valid_corr`,
+  with zero summary warnings. Its exact dataset-variant association scan completed
+  across accessible experiments and returned one related use. Temporary state was
+  isolated and removed.
+
+The migration notes in [README](../README.md#migration-research-boundary) are
+research, not execution evidence. No tracking-store migration, cross-server
+import, remote journal write or model-provider call was performed for v0.3.
+The v0.2 record below retains the earlier release's integration and performance
+evidence; the v0.3 workspace checks above exercise the new inspection flows.
 
 ## v0.2 verification
 

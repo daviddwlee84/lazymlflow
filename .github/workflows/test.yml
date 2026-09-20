@@ -17,6 +17,7 @@ jobs:
       - run: go test -race ./...
       - run: go build -o bin/lazymlflow ./cmd/lazymlflow
       - run: python3 scripts/pty_smoke.py --binary ./bin/lazymlflow
+      - run: python3 scripts/pty_inspection.py --binary ./bin/lazymlflow
   mlflow:
     runs-on: ubuntu-latest
     strategy:

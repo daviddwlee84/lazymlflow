@@ -67,7 +67,12 @@ class Fixture:
                 if url.path == "/version":
                     self.respond("3.16.1", content_type="text/plain")
                 elif url.path.endswith("runs/get"):
-                    self.respond({"run": fixture.run(fixture.ids.index(query["run_id"][0]), "1")})
+                    self.respond({"run": fixture.get_run(query["run_id"][0])})
+                elif url.path.endswith("experiments/get"):
+                    experiment = query["experiment_id"][0]
+                    self.respond({"experiment": {"experiment_id": experiment,
+                                                 "name": "Alpha 專案" if experiment == "1" else "Beta",
+                                                 "lifecycle_stage": "active"}})
                 elif url.path.endswith("metrics/get-history"):
                     self.respond({"metrics": [{"key": "loss", "step": i, "timestamp": 1700000000000 + i * 1000, "value": 1 / (i + 1)} for i in range(20)]})
                 elif url.path.endswith("artifacts/list"):
@@ -90,6 +95,9 @@ class Fixture:
                 "data": {"metrics": [{"key": "loss", "value": 0.1 * (index + 1), "step": 20, "timestamp": 1700000020000}],
                          "params": [{"key": "lr", "value": str(0.01 * (index + 1))}],
                          "tags": [{"key": "team", "value": "research"}]}}
+
+    def get_run(self, run_id):
+        return self.run(self.ids.index(run_id), "1")
 
     def close(self):
         self.server.shutdown()

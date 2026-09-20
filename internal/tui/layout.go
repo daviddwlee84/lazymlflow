@@ -154,6 +154,9 @@ func (m *model) hitAt(x, y int) string {
 		}
 		for _, h := range content.Hits {
 			if py >= 0 && py < r.H-2 && px >= 0 && px < r.W-2 && h.contains(px, py) {
+				if h.ID == "inspect-chart" {
+					return fmt.Sprintf("inspect-chart:%d:%d", px-h.X, h.W)
+				}
 				return h.ID
 			}
 		}
@@ -299,6 +302,9 @@ func (m *model) handleMouse(msg tea.Msg) tea.Cmd {
 	return nil
 }
 func (m *model) activateHit(id string) tea.Cmd {
+	if cmd, ok := m.activateInspectionHit(id); ok {
+		return cmd
+	}
 	kind, key, _ := strings.Cut(id, ":")
 	switch kind {
 	case "action":
@@ -394,6 +400,9 @@ func (m *model) overlayHit(x, y int, r rect) string {
 	return ""
 }
 func (m *model) detailContent(w, h int) paneContent {
+	if m.isInspectionTab() {
+		return m.inspectionContent(w, h)
+	}
 	p := paneContent{Lines: m.detailLines(w, h)}
 	if m.tab != 4 {
 		return p
