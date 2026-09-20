@@ -53,6 +53,29 @@ A test binary often has no release module version: use a small pure resolver
 for deterministic tests and verify an actual installed release afterward.
 Update checks and self-update behavior are separate product features.
 
+When an explicit upgrade command is requested, read
+[self-update.md](self-update.md). Choose its strategy from the artifacts actually
+published and ownership of the running executable. Build provenance alone does
+not identify an installer, and a moved Go-built binary needs an update at its
+current resolved path. The reference covers source-only releases, verified
+assets, package managers, local-build preservation, and transactional replacement.
+
+## Changelog and release consistency
+
+Maintain a user-facing `CHANGELOG.md` with an Unreleased section and dated
+version sections. Record visible behavior, compatibility changes and fixes;
+do not replace it with internal commit chronology. When backfilling an existing
+release, inspect what its tag actually contained. Link upgrade instructions to
+the changelog and choose the next version under the project's policy.
+
+Finish tests and required CI on the exact source to release. Then create the
+immutable tag and derive release notes from that version's changelog section.
+The changelog version, Git tag, hosted release and installed `--version` must
+agree. Source `go install` needs the tag and module metadata, not merely a changed
+hard-coded constant or a local build with injected linker flags. Verify fixed-tag
+and `@latest` installs outside the checkout; account for public proxy indexing
+before treating a newly pushed tag's absence as a code failure.
+
 ## Later stage: packaged releases
 
 When users need installation without a Go toolchain, add the requested OS/arch
@@ -63,8 +86,10 @@ source release to upstream Homebrew acceptance, Windows packaging, or automatic
 updates unless they are part of the task.
 
 Keep source installs and packaged releases on the same public version contract.
-If an operational skill is embedded, it travels with each binary; a separately
-installed skill copy needs an explicit refresh path if that feature is offered.
+If an operational skill is embedded, it travels with each binary; end users need
+no separate `npx skills` update for `--skill` output. A separately installed skill
+copy needs an explicit refresh path if that feature is offered. Updating the
+project's development skills remains a contributor workflow.
 For a requested distribution pipeline, the optional
 [CLI release skill](https://github.com/daviddwlee84/agent-skills/tree/main/skills/local/cli-release-distribution)
 covers broader release-channel work.

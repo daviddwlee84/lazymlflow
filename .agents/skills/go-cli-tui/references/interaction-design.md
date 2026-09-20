@@ -8,6 +8,8 @@ new applications; preserve established bindings when extending one.
 - [Layout follows the task](#layout-follows-the-task)
 - [Navigation and input ownership](#navigation-and-input-ownership)
 - [Search, help, and continuity](#search-help-and-continuity)
+- [Mouse interaction](#mouse-interaction)
+- [Monitoring data](#monitoring-data)
 - [Terminal presentation](#terminal-presentation)
 - [Sources](#sources)
 
@@ -98,10 +100,44 @@ and reveals workflow details progressively. Add search when content warrants it.
 Opening help reads existing state, without fresh network probes. Key remapping
 changes the hints as well as dispatch.
 
-Mouse support complements keyboard access. First click selects; activation
-behavior is explicit and reuses actions. Closing a modal with an outside click
-must not activate the row behind it. Use the computed layout rectangles for
-hit testing. Allow disabling mouse capture for native terminal text selection.
+## Mouse interaction
+
+Mouse support complements keyboard access; make capture configurable so native
+terminal selection remains available. Check the pinned framework's event and
+mouse-mode APIs before copying examples from another major version.
+
+- Derive rendering and hit rectangles from one pure layout calculation, including
+  borders, scroll offsets, narrow-pane collapse and visible clipping. Do not
+  populate hit maps as a side effect of `View`: input may precede another render.
+- Click rows to select/focus. Keep activation explicit and route buttons through
+  the same semantic actions and availability checks as keyboard/palette input.
+- For press/release buttons, remember the semantic target on press and activate
+  only when release hits that same target. Revalidate the entity, pending state
+  and read-only policy on release. Cancel the press after target, overlay,
+  selection or layout changes; a coordinate is not durable authority.
+- Let the active modal consume all mouse events, including clicks outside its
+  visible box. Closing a modal cannot activate content behind it. Wheel events
+  scroll the hovered pane or active modal, respecting actual visible rows.
+- In forms, clicking a field can focus it while caret editing remains keyboard
+  driven. Save, Cancel and Test should preserve the same draft/review lifecycle
+  as the keyboard path. Printable mouse-toggle mnemonics still type in inputs.
+
+## Monitoring data
+
+For a btop-like terminal dashboard, establish source semantics before choosing
+charts. Use terminal-native Braille/block/ASCII renderers as appropriate, and
+make narrow screens retain the actionable summary rather than a broken grid.
+
+Keep histories bounded per target and timestamp samples at observation. Distinct
+sources need distinct freshness: a working log stream does not make a failed
+memory poll current. Show inactive/disconnected gaps instead of synthetic zeros.
+Distinguish initial warmup zero, true zero, unavailable values and counter resets.
+Label rates, cumulative counters and resource scope (process versus host).
+
+Aggregate full snapshots before applying a browsing-row cap. If the source itself
+was truncated or rejected, mark that result incomplete/stale. Drilldowns should
+use stable IDs or exact structured predicates; a substring filter cannot promise
+that a clicked aggregate and its detail list contain the same objects.
 
 ## Terminal presentation
 

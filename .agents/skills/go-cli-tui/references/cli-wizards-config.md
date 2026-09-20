@@ -147,6 +147,12 @@ both reads and wizard writes. A missing default file is fine; an explicit
 missing file, malformed content, or invalid field produces an actionable error.
 Do not silently load `./config.toml` as a trusted override.
 
+For an external-editor command, resolve the settings path independently of
+parsing so malformed files can be repaired. Suppress editor launch and file
+creation for JSON/non-TTY intent. Parse quoted editor arguments without shell
+evaluation, use the platform's editor precedence, create missing state only on
+an actual edit, and validate afterward without discarding invalid user edits.
+
 Expose a redacted effective-config view (`config show` or `--print-config`) and
 its selected path. Bind configuration to semantic actions, not row numbers or
 screen coordinates. Validate keymap conflicts per scope and regenerate help

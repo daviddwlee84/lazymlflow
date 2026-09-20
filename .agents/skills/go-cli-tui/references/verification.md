@@ -61,11 +61,29 @@ its terminal interaction works on that OS.
 | 80×24, narrow, wide, rapid/zero-sized resize | No panic or negative dimensions; main task and quit remain reachable |
 | Chinese, combining text, emoji, NO_COLOR, light/dark | No broken truncation; meaning and focus do not depend only on color |
 | External editor/child success, failure, cancellation | Terminal restored/reacquired; current context and child outcome remain usable |
+| Mouse press/release, drag off button, layout/target change while pressed | Only the same still-enabled semantic action can execute; no stale coordinate activation |
+| Modal outside click/wheel; click field then type action mnemonic | No click-through; field keeps text ownership; draft remains unsaved until submit |
+| Mouse disabled or toggled; wheel over inactive pane | Native selection can be restored; hovered pane scroll/focus is predictable |
+| Timestamped graphs after disconnect, target switch, source failure and counter reset | Gaps/stale source age remain truthful; history and aggregates stay bounded |
 | Normal exit, handled interruption, supported recovery | Shell cursor, echo, and terminal modes restored |
 
 For a CLI-only change, skip irrelevant full-screen cases. For a navigation or
 wizard change, arrow/Vim equivalence, text ownership, Back/cancel, and real input
 checks are central. A resize snapshot alone cannot validate key handling.
+
+## Mouse in a real PTY
+
+Model tests prove semantic dispatch; also drive the terminal parser and reporting
+mode in a real PTY. For SGR mouse reporting, coordinates on the wire are one-based:
+`ESC [ < 0 ; X ; Y M` presses the left button and the final `m` releases it.
+Wheel codes are 64/65. Send bytes to the PTY, not directly to `Update`, and assert
+observable navigation/action results. Check capture enable/disable output and
+terminal cleanup on exit. Include resize-between-press-and-release and a modal
+click-through case in deterministic tests even when the PTY scenario stays short.
+
+A replay emulator need not understand mouse reporting modes to display the
+resulting screen; inspect raw control sequences separately when needed. Snapshot
+appearance alone does not prove a mouse event reached the intended action.
 
 ## Unicode emulator limits
 

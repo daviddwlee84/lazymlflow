@@ -123,6 +123,9 @@ guided setup, validation, configuration, or shell integration.
 - Read [go-distribution.md](references/go-distribution.md) when preparing a Go
   CLI for other users: start with the actual main-package install path, version
   reporting, and published tags; add package managers when the release needs them.
+- Read [self-update.md](references/self-update.md) when adding an upgrade command:
+  choose source, release assets, or the owning package manager from evidence;
+  verify and replace the running copy while preserving local builds by default.
 - Read [verification.md](references/verification.md) before declaring an
   interaction implemented. Select applicable cases, use deterministic state
   tests, and exercise a real PTY; screenshots cannot prove input behavior.
