@@ -1,0 +1,29 @@
+version = 1
+secrets = "block"
+known = "block"
+generic = "warn"
+
+# Exact, reviewed non-production values. Audit scans intentionally report them.
+[[exceptions]]
+rule = "generic-password-assignment-single-quoted"
+path = "internal/server/templates/runtime.py"
+pattern = '^POSTGRES_PASSWORD$'
+reason = "Environment-variable name in the secret lookup map; the password value is read from os.environ at runtime."
+
+[[exceptions]]
+rule = "generic-password-assignment-single-quoted"
+path = "internal/server/templates/runtime.py"
+pattern = '^LAZYMLFLOW_BOOTSTRAP_PASSWORD$'
+reason = "Environment-variable name in the secret lookup map; the bootstrap password value is read from os.environ at runtime."
+
+[[exceptions]]
+rule = "generic-password-assignment"
+path = "internal/connection/ssh_test.go"
+pattern = '^selected-password$'
+reason = "Synthetic Basic-auth fixture for an isolated httptest upstream and loopback proxy; no external service authentication."
+
+[[exceptions]]
+rule = "generic-password-assignment"
+path = "scripts/integration_s3.py"
+pattern = '^lazymlflow-test-secret$'
+reason = "Synthetic credential shared by disposable loopback MinIO and its integration client, with temporary storage and explicit teardown."

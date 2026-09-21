@@ -173,7 +173,7 @@ func decodeJSON(b []byte, out any) error {
 		case map[string]any:
 			for k, item := range x {
 				switch k {
-				case "timestamp", "step", "start_time", "end_time", "creation_time", "last_update_time", "file_size":
+				case "timestamp", "step", "start_time", "end_time", "creation_time", "last_update_time", "file_size", "creation_timestamp", "last_updated_timestamp", "creation_timestamp_ms", "last_updated_timestamp_ms":
 					if s, ok := item.(string); ok {
 						if _, err := strconv.ParseInt(s, 10, 64); err == nil {
 							x[k] = json.Number(s)

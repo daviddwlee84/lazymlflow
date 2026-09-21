@@ -60,6 +60,10 @@ func Execute(ctx context.Context, args []string, options Options) int {
 	if err == nil {
 		return 0
 	}
+	var child *ChildExitError
+	if errors.As(err, &child) {
+		return child.Code
+	}
 	status, code := 1, "runtime_error"
 	var usage usageError
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -139,7 +143,7 @@ func NewRoot(options Options) *cobra.Command {
 	root.PersistentFlags().StringVar(&a.targetID, "target", "", "Configured target ID")
 	root.PersistentFlags().StringVar(&a.trackingURI, "tracking-uri", "", "Temporary HTTP endpoint, local store, or SQLite URI")
 	root.PersistentFlags().BoolVar(&a.jsonOutput, "json", false, "Write machine-readable JSON")
-	root.PersistentFlags().BoolVar(&a.interactive, "interactive", false, "Open the dashboard or a supported target form")
+	root.PersistentFlags().BoolVar(&a.interactive, "interactive", false, "Open the dashboard or a supported target/server form")
 	root.PersistentFlags().BoolVar(&a.mouse, "mouse", true, "Enable dashboard mouse controls (explicit value overrides saved preference)")
 	root.MarkFlagsMutuallyExclusive("target", "tracking-uri")
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
@@ -155,8 +159,8 @@ func NewRoot(options Options) *cobra.Command {
 		if a.interactive && (a.jsonOutput || !options.IsTerminal()) {
 			return usagef("--interactive requires an input/output terminal and cannot be used with --json")
 		}
-		if a.interactive && cmd != root && !(cmd.Parent() != nil && cmd.Parent().Name() == "targets" && (cmd.Name() == "add" || cmd.Name() == "edit")) {
-			return usagef("--interactive is supported by the dashboard and targets add/edit")
+		if a.interactive && cmd != root && !(cmd.Parent() != nil && ((cmd.Parent().Name() == "targets" && (cmd.Name() == "add" || cmd.Name() == "edit")) || (cmd.Parent().Name() == "server" && cmd.Name() == "init"))) {
+			return usagef("--interactive is supported by the dashboard, targets add/edit, and server init")
 		}
 		return nil
 	}
@@ -170,7 +174,7 @@ func NewRoot(options Options) *cobra.Command {
 		}
 		return a.dashboard(cmd.Context(), cmd.Flags().Changed("mouse"))
 	}
-	root.AddCommand(a.targetsCommand(), a.experimentsCommand(), a.runsCommand(), a.metricsCommand(), a.artifactsCommand(), a.openCommand(), a.configCommand(), a.doctorCommand(), a.viewCommand(), a.datasetsCommand(), a.notesCommand(), a.promptCommand())
+	root.AddCommand(a.targetsCommand(), a.experimentsCommand(), a.runsCommand(), a.metricsCommand(), a.artifactsCommand(), a.openCommand(), a.configCommand(), a.doctorCommand(), a.viewCommand(), a.datasetsCommand(), a.notesCommand(), a.promptCommand(), a.serverCommand(), a.modelsCommand())
 	root.AddCommand(&cobra.Command{Use: "version", Short: "Print the build version", Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if a.jsonOutput {
 			return a.output(cmd, map[string]string{"version": options.Version})

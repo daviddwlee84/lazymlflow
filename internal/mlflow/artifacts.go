@@ -175,6 +175,33 @@ func parentDir(p string) string {
 // Downloads stage next to it, so a failed/canceled transfer cannot masquerade as
 // a completed output and replacement stays on the same filesystem.
 func (c *Client) DownloadArtifact(ctx context.Context, q core.DownloadRequest, progress func(core.Progress)) (core.DownloadResult, error) {
+	if _, err := artifactPath(q.Path); err != nil {
+		return core.DownloadResult{}, err
+	}
+	if q.Destination == "" {
+		return core.DownloadResult{}, errors.New("download destination is required")
+	}
+	r, err := c.GetRun(ctx, q.RunID)
+	if err != nil {
+		return core.DownloadResult{}, err
+	}
+	source := artifactSource{uri: r.Info.ArtifactURI, list: func(ctx context.Context, p string) (core.ArtifactPage, error) { return c.listArtifacts(ctx, r, p) }, cliArgs: func(p, stage string) []string {
+		args := []string{"artifacts", "download", "--run-id", q.RunID, "--dst-path", stage}
+		if p != "" {
+			args = append(args, "--artifact-path", p)
+		}
+		return args
+	}}
+	return c.downloadSource(ctx, q, source, progress)
+}
+
+type artifactSource struct {
+	uri     string
+	list    func(context.Context, string) (core.ArtifactPage, error)
+	cliArgs func(string, string) []string
+}
+
+func (c *Client) downloadSource(ctx context.Context, q core.DownloadRequest, src artifactSource, progress func(core.Progress)) (core.DownloadResult, error) {
 	var result core.DownloadResult
 	p, err := artifactPath(q.Path)
 	if err != nil {
@@ -196,11 +223,7 @@ func (c *Client) DownloadArtifact(ctx context.Context, q core.DownloadRequest, p
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return result, err
 	}
-	r, err := c.GetRun(ctx, q.RunID)
-	if err != nil {
-		return result, err
-	}
-	uri, proxy, err := c.proxyURI(r.Info.ArtifactURI)
+	uri, proxy, err := c.proxyURI(src.uri)
 	if err != nil {
 		return result, err
 	}
@@ -220,7 +243,7 @@ func (c *Client) DownloadArtifact(ctx context.Context, q core.DownloadRequest, p
 			if parent == "." {
 				parent = ""
 			}
-			listing, e := c.listArtifacts(ctx, r, parent)
+			listing, e := src.list(ctx, parent)
 			if e != nil {
 				return result, e
 			}
@@ -237,7 +260,7 @@ func (c *Client) DownloadArtifact(ctx context.Context, q core.DownloadRequest, p
 			}
 		}
 		if isDir {
-			err = c.downloadDirectory(ctx, r, uri, p, source, progress, &result)
+			err = c.downloadDirectory(ctx, src, uri, p, source, progress, &result)
 		} else {
 			err = c.downloadFile(ctx, uri, p, source, progress, &result)
 		}
@@ -248,10 +271,7 @@ func (c *Client) DownloadArtifact(ctx context.Context, q core.DownloadRequest, p
 		if c.opts.ArtifactCLI == nil {
 			return result, errors.New("direct artifact access needs MLflow CLI; configure Python or install uv")
 		}
-		args := []string{"artifacts", "download", "--run-id", q.RunID, "--dst-path", stage}
-		if p != "" {
-			args = append(args, "--artifact-path", p)
-		}
+		args := src.cliArgs(p, stage)
 		if progress != nil {
 			progress(core.Progress{Path: p, Total: -1})
 		}
@@ -319,11 +339,11 @@ func (c *Client) DownloadArtifact(ctx context.Context, q core.DownloadRequest, p
 	}
 	return result, nil
 }
-func (c *Client) downloadDirectory(ctx context.Context, r core.Run, uri, p, dest string, progress func(core.Progress), result *core.DownloadResult) error {
+func (c *Client) downloadDirectory(ctx context.Context, src artifactSource, uri, p, dest string, progress func(core.Progress), result *core.DownloadResult) error {
 	if err := os.MkdirAll(dest, 0755); err != nil {
 		return err
 	}
-	list, err := c.listArtifacts(ctx, r, p)
+	list, err := src.list(ctx, p)
 	if err != nil {
 		return err
 	}
@@ -333,7 +353,7 @@ func (c *Client) downloadDirectory(ctx context.Context, r core.Run, uri, p, dest
 		}
 		child := filepath.Join(dest, path.Base(a.Path))
 		if a.IsDir {
-			err = c.downloadDirectory(ctx, r, uri, a.Path, child, progress, result)
+			err = c.downloadDirectory(ctx, src, uri, a.Path, child, progress, result)
 		} else {
 			err = c.downloadFile(ctx, uri, a.Path, child, progress, result)
 		}

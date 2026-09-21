@@ -34,7 +34,7 @@ func (a *app) targetsCommand() *cobra.Command {
 		}
 		return w.Flush()
 	}})
-	group.AddCommand(a.targetWriteCommand(false), a.targetWriteCommand(true))
+	group.AddCommand(a.targetWriteCommand(false), a.targetWriteCommand(true), a.targetsEnvironmentCommand(), a.targetsExecCommand())
 	group.AddCommand(&cobra.Command{Use: "remove ID", Short: "Remove a target from local config (MLflow data is untouched)", Args: exactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, err := a.load()
 		if err != nil {

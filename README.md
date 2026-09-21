@@ -9,6 +9,11 @@ lazymlflow does not implement MLflow's storage format or database schema.
 
 Tagged [GitHub releases](https://github.com/daviddwlee84/lazymlflow/releases) provide macOS/Linux amd64/arm64 archives, SHA-256 checksums, and Bash/Zsh completions. Verify the matching archive against `checksums.txt` before installing it. See [RELEASING.md](RELEASING.md).
 
+Optional workflows recommend and create persistent MLflow servers, prepare
+training environments, inspect registered/logged models, and export model
+artifacts with manifests that CI can verify. Browsing remains read-only;
+server provisioning is an explicit, separate operation.
+
 ## Build and run
 
 Requires Go 1.25 or newer. macOS and Linux are the primary supported platforms.
@@ -115,6 +120,111 @@ access. The application does not automatically modify remote server settings.
 the selected connection and reports the actual version; `doctor --offline`
 only inspects configuration and available tools.
 
+### Training with a target
+
+```sh
+lazymlflow targets env lab --shell sh > mlflow-env.sh
+. ./mlflow-env.sh
+python train.py
+
+# Or keep the environment scoped to one process:
+lazymlflow targets exec lab -- python train.py
+lazymlflow targets env lab --json
+```
+
+Shell output uses credential **references**, never resolved passwords or tokens.
+Set the referenced variables in your shell before sourcing it. JSON separates
+literal values, environment references and variables to clear. `sh` output works
+with sh, bash and zsh. Unrelated provider settings remain inherited; selected
+target settings override conflicting MLflow connection settings.
+
+Named Basic-auth profiles require both username/password references to resolve
+to nonempty values. The MLflow SDK can also read `~/.mlflow/credentials`;
+environment output documents that precedence, and `targets exec` rejects a
+conflicting saved Basic pair before starting a named token/no-auth command.
+Temporary `--tracking-uri` commands retain the SDK's ambient credential behavior.
+
+For SSH targets, use `targets exec`: it keeps the owned tunnel alive until the
+training command exits, forwards terminal input/signals, and preserves the
+child's exit code. Existing file/SQLite targets are readonly browsing adapters;
+create a persistent HTTP server below for training. In the dashboard, `E` previews
+and copies the selected target's environment or its SSH execution command.
+
+## Persistent server setup
+
+```sh
+lazymlflow server recommend --remote-training --json
+lazymlflow server init                         # terminal wizard
+lazymlflow server init personal --dir ./mlflow-server --register-target
+lazymlflow server up --dir ./mlflow-server
+lazymlflow server status --dir ./mlflow-server
+lazymlflow server logs --dir ./mlflow-server
+lazymlflow server down --dir ./mlflow-server    # preserves data volumes
+```
+
+The dashboard uses the same wizard through `t`, then `s` (or Ctrl+N). Choose the
+training setup, adjust storage/access, review, and optionally start the stack or
+save a target. Back preserves the draft; nothing is created before submission.
+Generation works without Docker. Lifecycle commands require Docker and a
+generated stack directory. The persistent services continue after lazymlflow exits.
+
+| Need | Recommended setup |
+| --- | --- |
+| One person on one machine | SQLite and proxied local artifacts |
+| Shared or remote training | PostgreSQL and proxied server-local artifacts |
+| Existing mounted NAS | Local PostgreSQL and proxied NAS artifacts |
+| Existing S3 service | PostgreSQL and the existing endpoint/bucket |
+| Managed S3 with no preference | RustFS; SeaweedFS is also supported |
+
+LAN access defaults to HTTPS and native MLflow users/roles. TLS and authentication
+are independent options; an explicit `--tls off` or `--auth off` is supported for
+trusted environments. Native permissions default to `NO_PERMISSIONS`; use the
+MLflow Admin UI to create members and grant access. The bootstrap password is
+stored in a private file, and restarting preserves existing passwords and grants.
+
+Training hosts connect to the tracking endpoint; artifact proxying means they
+normally need neither NAS mounts nor S3 credentials. A NAS filesystem is an
+artifact directory, not a generic replacement for object-store/database disks.
+Generated services use pinned images and persistent volumes; moving existing
+experiments, changing providers and database upgrades are separate operations.
+See [self-hosting](docs/self-hosting.md) for Compose profiles, CA trust, storage
+requirements, optional security settings and backup boundaries.
+
+## Models and reproducible artifact handoff
+
+```sh
+lazymlflow models list
+lazymlflow models versions example
+lazymlflow models related RUN_ID
+lazymlflow models inspect models:/example@candidate --json
+lazymlflow models export models:/example/3 --dest ./model-bundle
+lazymlflow models verify ./model-bundle --manifest ./reviewed-manifest.json
+```
+
+Sources can be run artifact paths (`runs:/RUN_ID/model`), registered model
+versions, aliases, or MLflow 3 Logged Model IDs (`models:/m-...`). An alias is
+resolved once; manifests record the selected numeric version. Inspection reads
+bounded metadata, flavors, signatures and environment references without loading
+weights, importing model code or installing its dependencies.
+
+`export` preserves original files in `payload/` and writes a separate manifest
+with source identity and each file's size/SHA-256. Review and commit that manifest
+if desired; CI can export from its resolved source and `verify` against the
+committed manifest. Verification catches changed, missing and extra files,
+including when a remote URI has been overwritten. It does not establish model
+quality, runtime compatibility or production deployment.
+
+In the TUI, `O` opens registered models, `C` shows models related to the selected
+run, and Ctrl+O accepts an explicit source. Enter opens versions/inspection;
+`e` reviews and exports a bundle, `b` returns to the model list, and Esc returns
+to the original browser context.
+
+Complete MLflow packages with a `python_function` flavor are candidates for
+generic serving. Raw weights still need their model architecture, preprocessing
+and inference code. [Model handoff and serving](docs/model-handoff.md) covers
+the Git/CI workflow and the bounded synthetic serving study; no production model
+serving or deployment controller is included.
+
 ## TUI
 
 Run `lazymlflow` in a terminal. Experiments, runs and the selected run's details
@@ -133,6 +243,8 @@ local visibility choices persist across launches.
 | `M` | Toggle mouse capture (`--mouse=false` disables it at launch) |
 | `h l` | Change pane, or parent/enter in artifacts |
 | `t` | Target picker; `a` add and `e` edit inside picker |
+| Ctrl+N / `t`, then `s` | Set up a persistent MLflow server |
+| `E` / `O` / `C` | Target environment / registered models / selected run's models |
 | `/` | Search already loaded rows; Enter accepts, Esc clears |
 | `f` | Submit a server-side MLflow filter |
 | `s` | Searchable sort picker; Enter sets primary, Space adds secondary |

@@ -105,6 +105,7 @@ type targetState struct {
 }
 
 type model struct {
+	extensions                              *extensionState
 	work                                    *workspaceState
 	inspect                                 *inspectionState
 	ctx                                     context.Context
@@ -169,7 +170,7 @@ func newModel(ctx context.Context, o Options) *model {
 		m.states[t.ID] = newTargetState()
 	}
 	if len(m.targets) == 0 {
-		m.status = "No targets configured. Press t then a to add a tracking server or local store."
+		m.status = "No targets. Press t then a to connect, or Ctrl+N to set up a new MLflow server."
 	}
 	m.initWorkspace()
 	m.initInspection()
@@ -289,6 +290,9 @@ func (m *model) stopAll() {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	defer m.refreshRowCache()
 	defer m.syncInspection()
+	if cmd, handled := m.updateExtensions(msg); handled {
+		return m, cmd
+	}
 	if cmd, handled := m.updateWorkspace(msg); handled {
 		return m, cmd
 	}
@@ -459,6 +463,10 @@ type action struct {
 func act(id, keys, label string) action { return action{id, strings.Split(keys, "|"), label} }
 func (m *model) actions() []action {
 	a := append(m.workspaceActions(), m.inspectionActions()...)
+	a = append(a, act("server-setup", "ctrl+n", "Set up a persistent MLflow server"), act("model-registry", "O", "Browse registered models"), act("target-environment", "E", "Experiment environment"))
+	if m.run() != nil {
+		a = append(a, act("model-related", "C", "Models related to this run"), act("model-source", "ctrl+o", "Inspect a model or artifact URI"))
+	}
 	a = append(a, []action{act("quit", "q", "Quit"), act("help", "?", "Help"), act("palette", ":", "Actions"), act("targets", "t", "Switch target"), act("refresh", "r", "Refresh"), act("up", "up|k", "Move up"), act("down", "down|j", "Move down"), act("first", "home", "First row (also gg)"), act("last", "end|G", "Last row"), act("back", "esc", "Back / cancel"), act("nextpane", "tab", "Next pane"), act("prevpane", "shift+tab", "Previous pane"), act("left", "left|h", "Previous pane / parent / pan left"), act("right", "right|l", "Next pane / enter / pan right"), act("enter", "enter", "Inspect selection")}...)
 	a = append(a, act("pane1", "1", "Focus experiments"), act("pane2", "2", "Focus runs"), act("pane3", "3", "Focus details"), act("zoom", "z", "Zoom / restore pane"), act("resize", "ctrl+w", "Resize panes"), act("mouse", "M", "Toggle mouse capture"), act("layout", "L", "Layout options"))
 	if m.focus == 0 {
@@ -508,6 +516,21 @@ func (m *model) actions() []action {
 }
 
 func (m *model) perform(id string) tea.Cmd {
+	switch id {
+	case "server-setup":
+		return m.openServerSetup()
+	case "target-environment":
+		return m.openTargetEnvironment(m.target())
+	case "model-registry":
+		return m.openModels("registry", "")
+	case "model-related":
+		if r := m.run(); r != nil {
+			return m.openModels("related", r.ID())
+		}
+		return nil
+	case "model-source":
+		return m.openModelSource()
+	}
 	m.syncInspection()
 	if cmd, ok := m.performWorkspace(id); ok {
 		return cmd

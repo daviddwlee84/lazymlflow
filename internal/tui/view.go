@@ -93,6 +93,9 @@ func listStart(index, count, capacity int) int {
 }
 
 func (m *model) View() tea.View {
+	if v, ok := m.extensionView(); ok {
+		return v
+	}
 	if v, ok := m.workspaceView(); ok {
 		return v
 	}
@@ -241,7 +244,7 @@ func (m *model) footer() string {
 		}
 		switch m.overlay {
 		case "targets":
-			return "↑↓/jk select · Enter connect · a add · e edit · Esc back"
+			return "↑↓/jk select · Enter connect · a add · e edit · s setup server · E environment · Esc back"
 		case "overwrite":
 			return "y replace destination · n / Esc keep existing destination"
 		default:
@@ -362,7 +365,7 @@ func (m *model) overlayView(w, h int) string {
 			lines = append(lines, label)
 		}
 		if len(lines) == 0 {
-			lines = []string{"No targets. Press a to add a target."}
+			lines = []string{"No targets. Press a to connect or s to set up a new server."}
 		}
 		if len(m.targets) > 0 {
 			t := m.targets[clamp(m.menuIndex, 0, len(m.targets)-1)]

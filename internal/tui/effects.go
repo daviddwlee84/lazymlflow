@@ -629,6 +629,12 @@ func (m *model) handleOverlay(key string) tea.Cmd {
 		}
 		return nil
 	case "targets":
+		if key == "s" {
+			return m.openServerSetup()
+		}
+		if key == "E" && len(m.targets) > 0 {
+			return m.openTargetEnvironment(m.targets[clamp(m.menuIndex, 0, len(m.targets)-1)])
+		}
 		if key == "a" {
 			return m.startTargetForm(core.Target{}, false)
 		}

@@ -1,8 +1,78 @@
 # Verification record
 
-Verified on 2026-09-20. Automated fixtures use disposable configuration, stores,
+Verification records through 2026-09-21. Automated fixtures use disposable configuration, stores,
 credentials and artifact destinations; authorized read-only checks against an
 existing server are called out separately below.
+
+## Server setup, training environments and model handoff — 2026-09-21
+
+These checks use synthetic models, disposable tracking data and isolated
+configuration. They do not deploy or modify an existing tracking server.
+
+- macOS arm64: full `go vet ./...`, `go test -race ./...`, build, and the three
+  PTY scripts passed. Focused reruns cover the final model-list cancellation,
+  empty-list mouse, failed-setup draft recovery and narrow review scrolling fixes.
+- Native Linux arm64 with Go **1.25.0**: full vet/race/build and all three PTY
+  scripts passed in a cached test container. Network was disabled; source,
+  modules and the checksum-verified Go toolchain were mounted read-only. A final
+  focused serverform/TUI race run and setup/model PTY run passed after UI changes.
+  The task container and temporary Linux toolchain/build cache were removed.
+- `pty_setup_models.py`: standalone and embedded setup, review/Back/cancel,
+  narrow resizing, literal input, unchanged target default, secret-reference
+  environment copy, registry/version inspection, bundle hashes, related models
+  and explicit URI input passed. A fake Docker executable proves this generation
+  test never starts services. Existing browser and inspection PTY scripts passed.
+- Target environment tests cover self/cyclic references, quoting, stale settings,
+  secret-free JSON/shell output, local-store rejection and SSH proxy environment.
+  Attached-child tests use a real controlling PTY to verify input, foreground
+  ownership, terminal restoration, Ctrl+C and process-tree cleanup; ordinary
+  child exit codes are preserved.
+- SDK authentication checks cover nonempty named Basic credentials, alternate
+  auth-selector isolation, and detection of a saved SDK Basic credential pair
+  that would override a named token/no-auth profile. The new command reports
+  that conflict before starting a child and never prints the credential values.
+  Temporary URI invocations retain ambient SDK behavior.
+- Real Docker Engine **29.4.0**: all eight generated-stack profiles passed:
+  SQLite, SQLite/native auth/internal TLS, PostgreSQL/native auth/internal TLS,
+  PostgreSQL/local artifacts, RustFS, SeaweedFS, external S3 backed by a separate
+  disposable RustFS fixture, and supplied TLS certificates. Checks include
+  metric/artifact and Registry persistence, Unicode filenames, multipart S3,
+  wrong-CA rejection, anonymous 401, unauthorized-member artifact 403, changed
+  passwords surviving restart, and stable CA bytes. Deleting the initialized
+  administrator makes both native-auth profiles fail with repair diagnostics;
+  retaining the bootstrap password does not recreate the deleted administrator.
+  All test containers, networks and volumes were removed.
+- This controller's existing Docker proxy pointed to an unused local port and
+  its credential helper stalled. Docker testing used a task-owned temporary
+  proxy relay plus an isolated anonymous Docker configuration. Both were removed;
+  the user's global Docker proxy/auth settings were not changed. Running new
+  image pulls with that original configuration still requires resolving those
+  environment settings; they are not a dependency of the generated templates.
+- Real MLflow **3.16.1**: `integration_models.py` passed all four model source
+  forms, actual Logged Model wire data, input/output relationships and step 0,
+  safe metadata/dependency inspection, raw files, registry navigation, exact
+  payload preservation and independent-manifest tamper rejection. An invalid
+  pickle remains unread as model code. Direct local and proxied artifact paths
+  passed. The existing SQLite/FileStore regression also passed with SQLite
+  bytes unchanged.
+- Compatibility reruns against **MLflow 2.22.0 and 3.12.0** on Python 3.12 passed
+  the existing integration suite with the new downloader: queries, histories,
+  recursive Unicode/binary downloads, overwrite/missing-database protection and
+  unchanged SQLite SHA-256. Temporary fixtures and test binaries were removed.
+- `serving_feasibility.py` passed synthetic sklearn, custom PyFunc and explicit
+  recurrent-state HTTP inference. Local predict and a separate uv recreation of
+  the sklearn model's recorded environment produced the same result. Missing
+  inputs, wrong dtype and wrong shape were rejected. Temporary process groups
+  and model files were removed. See [the study](model-handoff.md#serving-feasibility-study)
+  for pinned versions and results; this does not validate a private model or a
+  production inference service.
+
+The CI workflow includes these PTY/model checks and a disposable Docker server
+matrix. Configuring CI is separate from running it on a remote forge; no remote
+CI run or release publication is claimed here. Actual NAS access requires an
+operator-supplied mount; missing-mount and symlink-escape guards have automated
+coverage. No physical NAS or live share-replacement scenario was used for this
+verification.
 
 ## v0.3 inspection, journal and summaries
 
@@ -155,7 +225,8 @@ this implementation session.
 
 ## Boundaries
 
-Databricks-specific behavior, direct PostgreSQL/MySQL access, registry/tracing
-features and cross-target comparisons remain outside this version. Other artifact providers
+The original v0.3 boundary below predates the model and server workflows above.
+Databricks-specific behavior, direct PostgreSQL/MySQL browsing, tracing
+features and cross-target comparisons remain outside that browser scope. Other artifact providers
 may work with a configured MLflow environment but were not tested. Browser and
 clipboard actions depend on the OS's available desktop commands.

@@ -28,6 +28,7 @@ jobs:
       - run: go build -o bin/lazymlflow ./cmd/lazymlflow
       - run: python3 scripts/pty_smoke.py --binary ./bin/lazymlflow
       - run: python3 scripts/pty_inspection.py --binary ./bin/lazymlflow
+      - run: python3 scripts/pty_setup_models.py --binary ./bin/lazymlflow
   mlflow:
     runs-on: ubuntu-latest
     strategy:
@@ -82,3 +83,28 @@ jobs:
           args: release --snapshot --clean
       - name: Verify four platform archives and native startup
         run: python3 scripts/release.py check --project lazymlflow --binary lazymlflow --smoke
+  models:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: astral-sh/setup-uv@v6
+      - run: go build -o bin/lazymlflow ./cmd/lazymlflow
+      - run: uv run --no-project --python 3.12 --with mlflow==3.16.1 python scripts/integration_models.py
+      - run: uv run --no-project --python 3.12 scripts/serving_feasibility.py --json
+  servers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build -o bin/lazymlflow ./cmd/lazymlflow
+      - run: python3 scripts/integration_server.py --binary ./bin/lazymlflow

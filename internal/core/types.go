@@ -129,10 +129,14 @@ type DatasetInput struct {
 }
 type RunInputs struct {
 	DatasetInputs []DatasetInput `json:"dataset_inputs,omitempty"`
+	ModelInputs   []ModelInput   `json:"model_inputs,omitempty"`
+}
+type ModelInput struct {
+	ModelID string `json:"model_id"`
 }
 type ModelOutput struct {
 	ModelID string `json:"model_id"`
-	Step    int64  `json:"step,omitempty"`
+	Step    *int64 `json:"step,omitempty"`
 }
 type RunOutputs struct {
 	ModelOutputs []ModelOutput `json:"model_outputs,omitempty"`
