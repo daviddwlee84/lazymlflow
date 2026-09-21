@@ -27,3 +27,27 @@ rule = "generic-password-assignment"
 path = "scripts/integration_s3.py"
 pattern = '^lazymlflow-test-secret$'
 reason = "Synthetic credential shared by disposable loopback MinIO and its integration client, with temporary storage and explicit teardown."
+
+[[exceptions]]
+rule = "generic-password-assignment"
+path = "internal/server/stack.go"
+pattern = '^\ \+\ string\(secrets\[$'
+reason = "Go expression concatenating runtime-generated secret bytes; no credential literal."
+
+[[exceptions]]
+rule = "generic-password-assignment"
+path = "internal/server/manager_test.go"
+pattern = '^\ \+\ string\(secret\)\ \+\ $'
+reason = "Go expression concatenating a fresh temporary fixture secret to test log redaction."
+
+[[exceptions]]
+rule = "generic-api-key"
+path = "internal/server/spec.go"
+pattern = '^s\.S3SecretKeyEnv$'
+reason = "Go field identifier in a multi-assignment of environment-variable names."
+
+[[exceptions]]
+rule = "generic-password-assignment"
+path = "internal/connection/clientenv_test.go"
+pattern = '^\}\);\ err\ ==\ nil\ \|\|\ !strings\.Contains\(err\.Error\(\),\ $'
+reason = "Go control-flow expression following an intentionally empty environment-variable test case."
