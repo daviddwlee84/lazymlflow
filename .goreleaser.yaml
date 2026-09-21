@@ -32,3 +32,9 @@ checksum:
   name_template: checksums.txt
 release:
   draft: true
+
+# Rootless, filtered by the committed .gitattributes rules.
+source:
+  enabled: true
+  name_template: "{{ .ProjectName }}_{{ .Version }}_source"
+  format: tar.gz

@@ -7,7 +7,7 @@ evidence-based summaries and reusable prompts. Remote tracking uses the public R
 `mlruns` and SQLite targets run an owned, temporary **official MLflow server**;
 lazymlflow does not implement MLflow's storage format or database schema.
 
-Tagged [GitHub releases](https://github.com/daviddwlee84/lazymlflow/releases) provide macOS/Linux amd64/arm64 archives, SHA-256 checksums, and Bash/Zsh completions. Verify the matching archive against `checksums.txt` before installing it. See [RELEASING.md](RELEASING.md).
+Tagged [GitHub releases](https://github.com/daviddwlee84/lazymlflow/releases) provide macOS/Linux amd64/arm64 archives, SHA-256 checksums, and Bash/Zsh completions. Verify the matching archive against `checksums.txt` before installing it. Source release archives and Go module downloads omit conversation records and agent plans while retaining build resources. See [RELEASING.md](RELEASING.md).
 
 Optional workflows recommend and create persistent MLflow servers, prepare
 training environments, inspect registered/logged models, and export model

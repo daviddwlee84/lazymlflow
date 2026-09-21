@@ -10,6 +10,7 @@ from pathlib import Path
 import platform
 import re
 import struct
+import sys
 import subprocess
 import tarfile
 import tempfile
@@ -17,6 +18,34 @@ import time
 
 TARGETS = [(os_name, arch) for os_name in ("darwin", "linux") for arch in ("amd64", "arm64")]
 STABLE_TAG = re.compile(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
+
+
+# Stable tags before this boundary retain their original immutable asset set.
+SOURCE_SINCE = (0, 2, 0)
+EVIDENCE_ROOTS = (".specstory", ".claude/plans", ".codex/plans", ".cursor/plans", ".opencode/plans")
+
+
+def source_required(version):
+    # Current GoReleaser snapshots always use the current source contract.
+    match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
+    return match is None or tuple(map(int, match.groups())) >= SOURCE_SINCE
+
+
+def verify_source(archive, smoke=False, tag=None):
+    with tarfile.open(archive, "r:gz") as stream:
+        members = stream.getmembers()
+        names = {member.name.rstrip("/") for member in members}
+        if not {"go.mod", "go.sum", "LICENSE"} <= names:
+            raise ValueError("source archive must be rootless and contain build inputs")
+        if any(name == root or name.startswith(root + "/") for name in names for root in EVIDENCE_ROOTS):
+            raise ValueError("source archive contains development evidence")
+        for member in members:
+            if not (member.isfile() or member.isdir() or member.issym()):
+                raise ValueError("unsupported source archive entry")
+            tarfile.data_filter(member, str(Path(tempfile.gettempdir()) / "release-source-inspection"))
+    if smoke:
+        subprocess.run([sys.executable, "scripts/check-distribution.py", "--source-archive", str(archive),
+                        "--version", tag or "release-source-check"], check=True)
 
 
 def digest(path):
@@ -38,14 +67,21 @@ def verify_dist(dist, project, binary, version, smoke=False, tag=None):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+-]*", version):
         raise ValueError("invalid archive version")
     expected = {f"{project}_{version}_{os_name}_{arch}.tar.gz": (os_name, arch) for os_name, arch in TARGETS}
+    source_name = f"{project}_{version}_source.tar.gz" if source_required(version) else None
+    expected_names = set(expected) | ({source_name} if source_name else set())
     checksums = {}
     for line in (dist / "checksums.txt").read_text().splitlines():
         parts = line.split()
         if len(parts) != 2 or not re.fullmatch(r"[0-9a-f]{64}", parts[0]) or parts[1] in checksums:
             raise ValueError("malformed or duplicate checksum entry")
         checksums[parts[1]] = parts[0]
-    if set(checksums) != set(expected):
-        raise ValueError("checksum manifest must name exactly the four release archives")
+    if set(checksums) != expected_names:
+        raise ValueError("checksum manifest must name exactly the four release archives and any required source archive")
+    if source_name:
+        archive = dist / source_name
+        if digest(archive) != checksums[source_name]:
+            raise ValueError(f"checksum mismatch: {source_name}")
+        verify_source(archive, smoke, tag)
     required = {binary, "LICENSE", f"completions/{binary}.bash", f"completions/{binary}.zsh"}
     host = (platform.system().lower(), {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine().lower(), platform.machine().lower()))
     for name, target in expected.items():
@@ -75,7 +111,7 @@ def verify_dist(dist, project, binary, version, smoke=False, tag=None):
                     subprocess.run([str(executable), "--help"], check=True, stdout=subprocess.DEVNULL, timeout=20)
                     if tag and tag not in version_output:
                         raise ValueError(f"binary version does not report {tag}")
-    return {name: dist / name for name in sorted(expected)} | {"checksums.txt": dist / "checksums.txt"}
+    return {name: dist / name for name in sorted(expected_names)} | {"checksums.txt": dist / "checksums.txt"}
 
 
 class GitHub:

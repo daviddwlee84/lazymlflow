@@ -1,0 +1,16 @@
+{
+  "main": "./cmd/lazymlflow",
+  "version_symbol": "main.version",
+  "required": [
+    "cmd/lazymlflow/main.go",
+    "internal/server/templates/preflight.py",
+    "internal/server/templates/runtime.py"
+  ],
+  "smoke": [
+    [
+      "server",
+      "recommend",
+      "--json"
+    ]
+  ]
+}

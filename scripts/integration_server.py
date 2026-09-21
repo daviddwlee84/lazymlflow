@@ -225,6 +225,11 @@ print('multipart roundtrip passed')
             run([binary, 'server', 'down', '--dir', str(directory)], timeout=90)
             repair = subprocess.run([binary, 'server', 'up', '--dir', str(directory)], text=True, capture_output=True, timeout=300)
             assert repair.returncode != 0 and 'repair native auth explicitly' in repair.stderr, repair.stderr[-2000:]
+            if profile == 'pg-auth':
+                # Direct auth-store inspection needs only the disposable
+                # database, independently of rejected server startup. Ensure
+                # it is healthy without invoking auth bootstrap again.
+                run(compose + ['up', '--detach', '--wait', 'postgres'], env=env, timeout=120)
             check_absent = "import sys;sys.path.insert(0,'/opt/lazymlflow');from runtime import configure;configure();from mlflow.server.auth import store,auth_config;store.init_db(auth_config.database_uri);assert not store.has_user('admin');assert store.get_user('unprivileged-smoke').is_admin;print('deleted administrator was not recreated')"
             run(compose + ['run', '--rm', '--no-deps', 'mlflow', 'python', '-c', check_absent], env=env, timeout=90)
         print(profile + ': passed', flush=True)

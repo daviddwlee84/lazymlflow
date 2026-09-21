@@ -129,6 +129,52 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "checksum mismatch"):
             release.verify_dist(self.root, "example", "example", "0.1.0")
 
+    def modern_fixture(self, source=True, evidence=False):
+        self.fixture_dist()
+        rows = []
+        for old in self.root.glob("*.tar.gz"):
+            new = old.with_name(old.name.replace("0.1.0", "0.2.0"))
+            old.rename(new)
+            rows.append(f"{release.digest(new)}  {new.name}")
+        if source:
+            archive_path = self.root / "example_0.2.0_source.tar.gz"
+            with tarfile.open(archive_path, "w:gz") as archive:
+                files = {"go.mod": b"module example.test", "go.sum": b"", "LICENSE": b"MIT"}
+                if evidence:
+                    files[".specstory/history.md"] = b"private development evidence"
+                for name, data in files.items():
+                    info = tarfile.TarInfo(name)
+                    info.size = len(data)
+                    archive.addfile(info, io.BytesIO(data))
+            rows.append(f"{release.digest(archive_path)}  {archive_path.name}")
+        (self.root / "checksums.txt").write_text("\n".join(rows) + "\n")
+
+    def test_new_source_asset_is_required_and_verified(self):
+        self.modern_fixture()
+        self.assertEqual(len(release.verify_dist(self.root, "example", "example", "0.2.0")), 6)
+        (self.root / "example_0.2.0_source.tar.gz").write_bytes(b"corrupt")
+        with self.assertRaisesRegex(ValueError, "checksum mismatch"):
+            release.verify_dist(self.root, "example", "example", "0.2.0")
+
+    def test_new_version_cannot_publish_without_source(self):
+        self.modern_fixture(source=False)
+        with self.assertRaisesRegex(ValueError, "required source"):
+            release.verify_dist(self.root, "example", "example", "0.2.0")
+
+    def test_source_evidence_is_rejected(self):
+        self.modern_fixture(evidence=True)
+        with self.assertRaisesRegex(ValueError, "development evidence"):
+            release.verify_dist(self.root, "example", "example", "0.2.0")
+
+    def test_old_tag_keeps_original_contract(self):
+        self.fixture_dist()
+        assets = release.verify_dist(self.root, "example", "example", "0.1.0")
+        self.assertEqual(len(assets), 5)
+        remote = FakeRemote({name: path.read_bytes() for name, path in assets.items()}, draft=False)
+        release.publish_complete(remote, "v0.1.0", assets)
+        self.assertEqual(remote.uploaded, [])
+        self.assertFalse(remote.published)
+
     def test_missing_platform_is_rejected(self):
         self.fixture_dist()
         lines = (self.root / "checksums.txt").read_text().splitlines()

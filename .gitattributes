@@ -1,0 +1,11 @@
+# Development evidence stays in Git, not source distributions.
+/.specstory export-ignore
+/.specstory/** export-ignore
+/.claude/plans export-ignore
+/.claude/plans/** export-ignore
+/.codex/plans export-ignore
+/.codex/plans/** export-ignore
+/.cursor/plans export-ignore
+/.cursor/plans/** export-ignore
+/.opencode/plans export-ignore
+/.opencode/plans/** export-ignore
