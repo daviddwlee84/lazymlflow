@@ -69,3 +69,13 @@ Run the packaging regression cases with:
 python3 -m unittest discover -s scripts -p test_distribution.py
 python3 scripts/check-distribution.py
 ```
+
+After publication, verify the real public Go proxy and both fixed-version and
+`@latest` installs in disposable runner state:
+
+```sh
+gh workflow run public-module.yml --ref main -f version=vMAJOR.MINOR.PATCH
+```
+
+This manual workflow checks out the immutable tag and loads its verifier from
+the workflow revision. It does not alter releases, tags, or installed user tools.

@@ -1,0 +1,45 @@
+name: Verify public Go module
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published stable version (vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Require a stable version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: '[[ "$RELEASE_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]'
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Load verifier from the tested workflow revision
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: git show "${WORKFLOW_SHA}:scripts/verify-published-module.py" > "$RUNNER_TEMP/verify-published-module.py"
+      - name: Download real ZIPs and install fixed and latest versions
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          python3 "$RUNNER_TEMP/verify-published-module.py" --root . --version "$RELEASE_VERSION" > "$RUNNER_TEMP/public-module.json"
+          cat "$RUNNER_TEMP/public-module.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: public-module-${{ inputs.version }}
+          path: ${{ runner.temp }}/public-module.json
+          if-no-files-found: error
