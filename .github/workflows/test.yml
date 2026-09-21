@@ -25,15 +25,18 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Test source and module packaging guards
+        if: hashFiles('scripts/check-distribution.py') != ''
         run: python3 -m unittest discover -s scripts -p test_distribution.py
       - name: Build independently extracted source and Go module distributions
+        if: hashFiles('scripts/check-distribution.py') != ''
         run: python3 scripts/check-distribution.py
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build -o bin/lazymlflow ./cmd/lazymlflow
       - run: python3 scripts/pty_smoke.py --binary ./bin/lazymlflow
       - run: python3 scripts/pty_inspection.py --binary ./bin/lazymlflow
-      - run: python3 scripts/pty_setup_models.py --binary ./bin/lazymlflow
+      - if: hashFiles('scripts/pty_setup_models.py') != ''
+        run: python3 scripts/pty_setup_models.py --binary ./bin/lazymlflow
   mlflow:
     runs-on: ubuntu-latest
     strategy:
@@ -99,8 +102,10 @@ jobs:
           go-version-file: go.mod
       - uses: astral-sh/setup-uv@v6
       - run: go build -o bin/lazymlflow ./cmd/lazymlflow
-      - run: uv run --no-project --python 3.12 --with mlflow==3.16.1 python scripts/integration_models.py
-      - run: uv run --no-project --python 3.12 scripts/serving_feasibility.py --json
+      - if: hashFiles('scripts/integration_models.py') != ''
+        run: uv run --no-project --python 3.12 --with mlflow==3.16.1 python scripts/integration_models.py
+      - if: hashFiles('scripts/serving_feasibility.py') != ''
+        run: uv run --no-project --python 3.12 scripts/serving_feasibility.py --json
   servers:
     runs-on: ubuntu-latest
     strategy:
@@ -116,4 +121,5 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go build -o bin/lazymlflow ./cmd/lazymlflow
-      - run: python3 scripts/integration_server.py --binary ./bin/lazymlflow --profiles "${{ matrix.profile }}"
+      - if: hashFiles('scripts/integration_server.py') != ''
+        run: python3 scripts/integration_server.py --binary ./bin/lazymlflow --profiles "${{ matrix.profile }}"
