@@ -73,6 +73,29 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(remote.uploaded, [])
         self.assertFalse(remote.published)
 
+    def test_new_draft_visibility_retries_reads_without_creating_twice(self):
+        draft = {"draft": True, "prerelease": False, "assets": []}
+        remote = mock.Mock()
+        remote.release.side_effect = [None, None, None, draft, draft]
+        with mock.patch.object(release.time, "sleep") as sleep:
+            release.publish_complete(remote, "v0.1.0", {})
+        remote.create.assert_called_once_with("v0.1.0")
+        remote.upload.assert_not_called()
+        remote.publish.assert_called_once_with("v0.1.0")
+        self.assertEqual(sleep.call_args_list, [mock.call(2), mock.call(4)])
+
+    def test_new_draft_visibility_timeout_preserves_draft_for_safe_resume(self):
+        remote = mock.Mock()
+        remote.release.return_value = None
+        with mock.patch.object(release.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "not visible yet"):
+                release.publish_complete(remote, "v0.1.0", {})
+        remote.create.assert_called_once_with("v0.1.0")
+        self.assertEqual(remote.release.call_count, 5)
+        self.assertEqual(sleep.call_args_list, [mock.call(2), mock.call(4), mock.call(8)])
+        remote.upload.assert_not_called()
+        remote.publish.assert_not_called()
+
     def test_incomplete_public_release_is_not_mutated(self):
         remote = FakeRemote({"one.tar.gz": b"one.tar.gz"}, draft=False)
         with self.assertRaisesRegex(ValueError, "incomplete"):

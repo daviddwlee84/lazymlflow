@@ -13,6 +13,7 @@ import struct
 import subprocess
 import tarfile
 import tempfile
+import time
 
 TARGETS = [(os_name, arch) for os_name in ("darwin", "linux") for arch in ("amd64", "arm64")]
 STABLE_TAG = re.compile(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
@@ -129,7 +130,16 @@ def publish_complete(remote, tag, assets):
     release = remote.release(tag)
     if release is None:
         remote.create(tag)
-        release = remote.release(tag)
+        # Draft creation can precede visibility in both GitHub lookup endpoints.
+        # Retry only reads; creating again could make an ambiguous duplicate.
+        for delay in (0, 2, 4, 8):
+            if delay:
+                time.sleep(delay)
+            release = remote.release(tag)
+            if release is not None:
+                break
+        if release is None:
+            raise RuntimeError("created draft is not visible yet; rerun to resume")
     if release is None or release["prerelease"]:
         raise ValueError("expected a stable release or draft")
     existing = {a["name"] for a in release["assets"]}
