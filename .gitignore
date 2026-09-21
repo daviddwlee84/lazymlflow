@@ -42,3 +42,7 @@ __pycache__/
 .pytest_cache/
 *.test
 /coverage.out
+
+/dist/
+
+/completions/

@@ -1,5 +1,13 @@
 name: Test
-on: [push, pull_request]
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
 permissions:
   contents: read
 jobs:
@@ -10,6 +18,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -26,6 +36,8 @@ jobs:
         mlflow: ['2.22.0', '3.12.0', '3.16.1']
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -36,9 +48,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - uses: astral-sh/setup-uv@v6
       - run: go build -o bin/lazymlflow ./cmd/lazymlflow
       - run: uv run --no-project --python 3.12 --with mlflow==3.16.1 --with boto3 python scripts/integration_s3.py
+
+  release-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test release verification and immutable publication
+        run: python3 -m unittest discover -s scripts -p "test_*release*.py"
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.2
+          args: check
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.18.2
+          args: release --snapshot --clean
+      - name: Verify four platform archives and native startup
+        run: python3 scripts/release.py check --project lazymlflow --binary lazymlflow --smoke

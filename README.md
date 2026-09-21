@@ -7,6 +7,8 @@ evidence-based summaries and reusable prompts. Remote tracking uses the public R
 `mlruns` and SQLite targets run an owned, temporary **official MLflow server**;
 lazymlflow does not implement MLflow's storage format or database schema.
 
+Tagged [GitHub releases](https://github.com/daviddwlee84/lazymlflow/releases) provide macOS/Linux amd64/arm64 archives, SHA-256 checksums, and Bash/Zsh completions. Verify the matching archive against `checksums.txt` before installing it. See [RELEASING.md](RELEASING.md).
+
 ## Build and run
 
 Requires Go 1.25 or newer. macOS and Linux are the primary supported platforms.
@@ -20,7 +22,7 @@ go build -o bin/lazymlflow ./cmd/lazymlflow
 Install from a checkout with `go install ./cmd/lazymlflow`. The main-package
 install path is `github.com/daviddwlee84/lazymlflow/cmd/lazymlflow`; no published
 release is required to build this checkout. Build a versioned binary with
-`go build -ldflags '-X main.version=0.3.0' -o bin/lazymlflow ./cmd/lazymlflow`.
+`go build -ldflags '-X main.version=v0.1.0' -o bin/lazymlflow ./cmd/lazymlflow`.
 
 Remote metadata and proxied artifacts need only the Go binary. Local stores and
 direct cloud artifact access require either [uv](https://docs.astral.sh/uv/)
