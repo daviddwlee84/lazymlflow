@@ -89,9 +89,24 @@ class GitHub:
                                 capture_output=True, text=True)
         if result.returncode == 0:
             return json.loads(result.stdout)
-        if "HTTP 404" in result.stderr:
-            return None
-        raise RuntimeError(f"cannot inspect release: {result.stderr.strip()}")
+        if "HTTP 404" not in result.stderr:
+            raise RuntimeError(f"cannot inspect release: {result.stderr.strip()}")
+        # GitHub's tag endpoint can omit an existing draft. Inspect every page
+        # before deciding creation is safe; gh --slurp preserves page boundaries.
+        pages = json.loads(self.call("api", "--paginate", "--slurp",
+                                     f"repos/{self.repo}/releases?per_page=100"))
+        if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+            raise RuntimeError("unexpected paginated release listing")
+        matches = []
+        for page in pages:
+            for candidate in page:
+                if not isinstance(candidate, dict):
+                    raise RuntimeError("unexpected release in paginated listing")
+                if candidate.get("tag_name") == tag:
+                    matches.append(candidate)
+        if len(matches) > 1:
+            raise RuntimeError(f"multiple releases use {tag}; refusing ambiguous publication")
+        return matches[0] if matches else None
 
     def create(self, tag):
         self.call("release", "create", tag, "--repo", self.repo, "--verify-tag", "--draft",

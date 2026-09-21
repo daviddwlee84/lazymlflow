@@ -1,5 +1,8 @@
 import hashlib
 import io
+import json
+import subprocess
+from unittest import mock
 from pathlib import Path
 import struct
 import tarfile
@@ -109,6 +112,68 @@ class ReleaseTests(unittest.TestCase):
         (self.root / "checksums.txt").write_text("\n".join(lines[:-1]) + "\n")
         with self.assertRaisesRegex(ValueError, "exactly the four"):
             release.verify_dist(self.root, "example", "example", "0.1.0")
+
+
+class GitHubAdapterTests(unittest.TestCase):
+    def setUp(self):
+        self.remote = release.GitHub("owner/example")
+        self.tag = "v0.1.0"
+        self.draft = {"id": 123, "tag_name": self.tag, "draft": True,
+                      "prerelease": False, "assets": []}
+        self.lookup = mock.patch("release.subprocess.run")
+        self.run = self.lookup.start()
+        self.addCleanup(self.lookup.stop)
+        self.run.return_value = subprocess.CompletedProcess([], 1, "", "gh: Not Found (HTTP 404)")
+        self.calls = mock.patch("release.subprocess.check_output")
+        self.call = self.calls.start()
+        self.addCleanup(self.calls.stop)
+
+    def test_tag_404_finds_existing_draft_on_later_page(self):
+        self.call.return_value = json.dumps([[{"tag_name": "v0.0.9"}], [self.draft]])
+        self.assertEqual(self.remote.release(self.tag), self.draft)
+        self.run.assert_called_once_with(
+            ["gh", "api", "repos/owner/example/releases/tags/v0.1.0"],
+            capture_output=True, text=True)
+        self.call.assert_called_once_with(
+            ["gh", "api", "--paginate", "--slurp", "repos/owner/example/releases?per_page=100"],
+            text=True)
+
+    def test_successful_tag_lookup_does_not_list_releases(self):
+        self.run.return_value = subprocess.CompletedProcess([], 0, json.dumps(self.draft), "")
+        self.assertEqual(self.remote.release(self.tag), self.draft)
+        self.call.assert_not_called()
+
+    def test_absent_tag_returns_none_only_after_all_pages(self):
+        self.call.return_value = json.dumps([[{"tag_name": "v0.0.9"}], []])
+        self.assertIsNone(self.remote.release(self.tag))
+        self.call.assert_called_once()
+
+    def test_duplicate_tag_refuses_publish_without_creating(self):
+        self.call.return_value = json.dumps([[self.draft], [{**self.draft, "id": 456}]])
+        with mock.patch.object(self.remote, "create") as create:
+            with self.assertRaisesRegex(RuntimeError, "multiple releases"):
+                release.publish_complete(self.remote, self.tag, {})
+            create.assert_not_called()
+
+    def test_auth_error_is_not_treated_as_missing_release(self):
+        self.run.return_value = subprocess.CompletedProcess([], 1, "", "gh: Forbidden (HTTP 403)")
+        with self.assertRaisesRegex(RuntimeError, "cannot inspect"):
+            self.remote.release(self.tag)
+        self.call.assert_not_called()
+
+    def test_listing_failure_cannot_authorize_creation(self):
+        self.call.side_effect = subprocess.CalledProcessError(1, ["gh", "api"])
+        with mock.patch.object(self.remote, "create") as create:
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.publish_complete(self.remote, self.tag, {})
+            create.assert_not_called()
+
+    def test_malformed_listing_is_rejected(self):
+        for value in ({"message": "not pages"}, [[None]], [self.draft]):
+            with self.subTest(value=value):
+                self.call.return_value = json.dumps(value)
+                with self.assertRaisesRegex(RuntimeError, "unexpected"):
+                    self.remote.release(self.tag)
 
 
 if __name__ == "__main__":
