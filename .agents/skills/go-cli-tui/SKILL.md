@@ -1,5 +1,6 @@
 ---
 name: go-cli-tui
+license: MIT
 description: 'Build Go CLIs, terminal dashboards, and interactive wizards with Lazygit-inspired UX. Use when creating a Go command-line tool, adding a CLI/TUI feature, designing Bubble Tea or Charm interfaces, improving keyboard navigation or responsiveness, or adding guided setup and XDG configuration. Defaults to Cobra and the compatible Charm stack, with arrow/Vim navigation, shared operations, and real terminal verification.'
 ---
 
@@ -123,6 +124,10 @@ guided setup, validation, configuration, or shell integration.
 - Read [go-distribution.md](references/go-distribution.md) when preparing a Go
   CLI for other users: start with the actual main-package install path, version
   reporting, and published tags; add package managers when the release needs them.
+- Read [shell-completion.md](references/shell-completion.md) for native generators,
+  user install/status, fpath activation, offline candidates and real shell tests.
+- Read [shell-context.md](references/shell-context.md) when exporting a parent-shell
+  environment, owning persistent connections, or generating consumer configuration.
 - Read [self-update.md](references/self-update.md) when adding an upgrade command:
   choose source, release assets, or the owning package manager from evidence;
   verify and replace the running copy while preserving local builds by default.

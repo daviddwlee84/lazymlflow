@@ -61,6 +61,8 @@ its terminal interaction works on that OS.
 | 80×24, narrow, wide, rapid/zero-sized resize | No panic or negative dimensions; main task and quit remain reachable |
 | Chinese, combining text, emoji, NO_COLOR, light/dark | No broken truncation; meaning and focus do not depend only on color |
 | External editor/child success, failure, cancellation | Terminal restored/reacquired; current context and child outcome remain usable |
+| Dashboard → shared CLI wizard → review/cancel or result → dashboard | One reader; result remains until acknowledgement; target identity and affected data refresh correctly |
+| No search matches; clipped review buttons | Hidden old choices cannot submit; invisible Apply regions cannot receive clicks |
 | Mouse press/release, drag off button, layout/target change while pressed | Only the same still-enabled semantic action can execute; no stale coordinate activation |
 | Modal outside click/wheel; click field then type action mnemonic | No click-through; field keeps text ownership; draft remains unsaved until submit |
 | Mouse disabled or toggled; wheel over inactive pane | Native selection can be restored; hovered pane scroll/focus is predictable |

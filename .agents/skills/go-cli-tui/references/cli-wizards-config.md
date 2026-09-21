@@ -79,6 +79,12 @@ writers, services, and cancellation without launching a real terminal.
 - A child cannot change its parent shell's cwd. If navigation requires a shell
   wrapper, use a narrow structured handoff, not `eval` of general command output.
 
+Authentication-required is not a missing wizard field. For SSH, keep background
+checks noninteractive and let an explicit human action hand the terminal to
+native SSH; machine output returns a structured requirement. Preserve the draft
+across cancellation. See [SSH authentication handoffs](async-terminal.md#ssh-authentication-handoffs)
+for terminal restoration, session lifetime and shared-master ownership.
+
 ## Wizard experience
 
 Use guided choice to remove syntax memorization, not to ask every possible flag.
@@ -92,18 +98,41 @@ changing an upstream choice invalidates or revalidates dependent answers.
 Validate locally on field/step completion, then validate the complete request
 through the domain service. Errors stay near the field and keep user input.
 
+For prefilled forms that only save local registrations or preferences, offer
+an explicit Save shortcut such as Ctrl+S from any field. Visiting every field
+is not a prerequisite; retain an optional Review action. Synchronize the active
+input into the draft, then use the same complete validation and save path.
+Failed validation or persistence keeps the draft and useful field focus.
+Connectivity tests inform the user but need not block saving an otherwise valid
+offline target. Cancel or invalidate pending tests so late results cannot replace
+the saved form. Direct Save still performs required owner inspection and does
+not bypass confirmation or review for core changes, remote applies, or other
+consequential operations.
+
 | Event | Default |
 |---|---|
 | Tab / Shift+Tab | Move between controls; input letters remain text |
 | Up/Down or j/k in a non-text selector | Select options |
 | Back button / Esc | Close nested selector first, then previous step |
 | Esc at first step / Cancel / Ctrl+C | Cancel the wizard; do not submit |
-| Submit step | Review target, resolved values, and effects before applying |
+| Ctrl+S, where direct local Save is offered | Validate and save the current draft without traversing remaining fields |
+| Review / consequential submit | Review target, resolved values, and effects before applying |
 | Finish/cancel from dashboard | Restore originating view/filter/selection |
 
 For a simple one-field prompt, Esc cancels directly. Do not override text
 editing with selector aliases. A form library supplies widgets, not the full
 application's draft, Back, review, or cancellation policy.
+
+Verify Save from early and late fields, validation failures, and stale test
+results. Send the raw Ctrl+S byte (`\x13`) through a real PTY; on POSIX terminals,
+check that IXON flow control is disabled while the TUI owns input and restored
+on exit. A model-level key test alone cannot detect Ctrl+S freezing terminal
+output before the application receives it.
+
+Guard search and mouse submission too. An empty filtered selection must not submit
+an older hidden choice. Clipped/offscreen buttons are not clickable; derive hits
+from visible geometry and invalidate presses after resize/layout changes. Start a
+destructive review on Cancel, and test Enter before changing that selection.
 
 Before apply, revalidate the current target when concurrent changes could make
 the review obsolete. Report partial effects separately from remaining work.
@@ -158,11 +187,29 @@ its selected path. Bind configuration to semantic actions, not row numbers or
 screen coordinates. Validate keymap conflicts per scope and regenerate help
 from effective bindings. Keep a usable Back/help/quit route after remapping.
 
-Before a configuration wizard saves, show the actual file and changes. Preserve
+Keep the destination file and save scope visible; offer a changes review and
+require it when the operation's consequences warrant it. Preserve
 unrelated fields/comments when editing an existing file, or offer an explicit
 manual edit if the writer cannot do so. Detect intervening edits before replacing
 the file and use an appropriate atomic write. Preferences are not a database
 for changing selections/logs. No hot reload is required for the first version.
+
+## Multi-target and externally owned state
+
+For cross-target operations, make source and destination explicit and resolve
+credentials independently. Reuse one preview/apply service from CLI and TUI.
+Bind a reviewed plan to the relevant state when concurrent edits can invalidate
+it, reread before apply, and report partial/unknown effects per operation.
+A digest detects stale observations; it does not make multiple remote writes
+an atomic transaction or justify automatic rollback.
+
+When another application owns persistent configuration, distinguish saved
+source, regenerated/applied runtime, and observed behavior. A file-write receipt
+must not imply that a native app reloaded it. Expose the owner's activation step
+and a separate verification action if there is no supported external API.
+
+For completion setup and candidate queries, see
+[shell-completion.md](shell-completion.md).
 
 ## Sources
 
