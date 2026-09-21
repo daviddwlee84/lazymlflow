@@ -16,7 +16,7 @@ uploaded to a draft and downloaded again for verification.
   `completions/lazymlflow.bash` / `completions/lazymlflow.zsh`.
 - New tags also include `lazymlflow_<version-without-v>_source.tar.gz`, a rootless `git archive` filtered by `.gitattributes`.
 - `checksums.txt` names exactly those five archives; tags before v0.2.0 retain their original four-archive contract.
-- The linker injects the Git tag into `main.version`.
+- The linker injects the Git tag into `main.version`; `go install` builds fall back to their Go module version, and builds without version metadata report `dev`.
 - Homebrew publication is managed centrally; this workflow does not write to a tap.
 
 ## Verify without publishing

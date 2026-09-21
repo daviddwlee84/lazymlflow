@@ -6,6 +6,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location("distribution", Path(__file__).with_name("check-distribution.py"))
 distribution = importlib.util.module_from_spec(SPEC)
@@ -13,6 +14,20 @@ SPEC.loader.exec_module(distribution)
 
 
 class DistributionTests(unittest.TestCase):
+    def test_runtime_smokes_use_disposable_user_state(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = {"main": ".", "version_symbol": "main.version"}
+            with mock.patch.dict(distribution.os.environ, {"DEV_CONFIG": "/real/config", "XDG_CONFIG_HOME": "/real/xdg"}), mock.patch.object(distribution, "run") as build, mock.patch.object(distribution.subprocess, "check_output", return_value="fixture-version") as command:
+                distribution.build_and_smoke(root, root / "candidate", config, "fixture-version")
+            self.assertIn("DEV_CONFIG", build.call_args.kwargs["env"])
+            for call in command.call_args_list:
+                env = call.kwargs["env"]
+                self.assertNotIn("DEV_CONFIG", env)
+                self.assertTrue(env["HOME"].startswith(str(root)))
+                self.assertTrue(env["XDG_CONFIG_HOME"].startswith(str(root)))
+                self.assertEqual(env["HOME"], env["USERPROFILE"])
+
     def test_missing_runtime_asset_and_evidence_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "missing required build inputs"):
             distribution.check_names(["go.mod"], ["go.mod", "embedded/help.md"])
