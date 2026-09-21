@@ -36,6 +36,60 @@ commands work. Versioned `go install` ignores the surrounding module; also
 check that the released module has no unsupported local `replace` dependence.
 Publish a new tag for a correction rather than moving a published version.
 
+## Source packaging boundaries
+
+Treat each download channel separately. A small binary release does not prove
+that source or module downloads are small.
+
+| Channel | Boundary to inspect |
+| --- | --- |
+| Binary archive | Explicit executable, license, completion and runtime-file allowlist. |
+| Git source archive | `.gitattributes` `export-ignore` for selected non-build paths. |
+| Go module ZIP | Go's module rules; nested `go.mod` boundaries exclude their subtrees. |
+| Git clone | The selected Git objects/history; archive rules do not reduce it. |
+
+Inventory tracked sizes and build inputs before excluding anything. Pure
+conversation/plan directories are candidates; maintained docs, tests, licenses,
+embedded operational skills, helper scripts and generated/runtime assets may be
+necessary inputs. Do not exclude every Markdown file, agent directory or script
+directory by name. Inspect `go:embed`, `go:generate` and release hooks explicitly.
+
+For a requested source-slimming change, use narrow root-anchored archive rules.
+For example, `/.specstory export-ignore` and `/.specstory/** export-ignore` leave
+the tracked evidence available in Git while omitting it from exported source.
+Apply equivalent rules only to the intended plan roots, not their whole parent
+agent directories. These exclusions are not secret redaction or Git untracking.
+
+Go module fetching deliberately disables `export-ignore` and `export-subst`.
+When the user also wants smaller module downloads, an empty or comment-only
+`go.mod` in an existing pure-evidence directory marks a nested-module boundary;
+Go omits that subtree from the parent module ZIP. Explain the marker's purpose,
+confirm that no build/embed/generate input crosses it, and leave the production
+module's dependencies unchanged. Do not create unused agent directories just
+to place markers in them.
+
+Verify the actual exported source **and** module ZIP: inspect members, extract
+into clean temporary directories, build the real main package, and exercise
+offline version/help/completion and applicable embedded-resource output. Report
+compressed bytes separately from uncompressed file totals. Test that a missing
+required asset or an ineffective exclusion is detected.
+
+`golang.org/x/mod/zip.CreateFromVCS` alone can give a false positive: its Git
+archive path can honor `export-ignore`, unlike the Go fetcher. For an offline
+module check, use a standalone temporary clone at the exact candidate SHA,
+override **only its** `info/attributes` with
+`* -export-subst -export-ignore`, then use a pinned official `x/mod/zip` version
+compatible with the project's Go minimum. Keep this verifier dependency in a
+test-only module. Check and unpack that ZIP before building. After publication,
+also inspect `go mod download -json` output and test a fixed-tag install with an
+isolated module cache and `GOBIN`.
+
+Preserve existing archive names, path layout, checksums and embedded build
+provenance. If introducing a dedicated source asset, update publisher allowlists
+and downstream validation together; retain the old contract for older tags.
+New rules affect new versions, not immutable published tags or cached module
+ZIPs. Source-capable updaters and package managers remain separate consumers.
+
 ## Version reporting across build paths
 
 A release workflow may inject a string using `-ldflags -X`, while ordinary
@@ -101,3 +155,9 @@ Reviewed 2026-09-20.
 - [Go install and module restrictions](https://go.dev/ref/mod#go-install), [version queries](https://go.dev/ref/mod#version-queries), and [publishing modules](https://go.dev/doc/modules/publishing): source-install and immutable-version contracts.
 - [runtime/debug.ReadBuildInfo](https://pkg.go.dev/runtime/debug#ReadBuildInfo): metadata embedded in the executable.
 - [dev-cli version resolver](https://github.com/daviddwlee84/dev-cli/blob/689836cdea61d46ee86cdfa4a0df42ac324e6561/internal/cli/root.go) and [installation documentation](https://github.com/daviddwlee84/dev-cli/blob/689836cdea61d46ee86cdfa4a0df42ac324e6561/README.md): inspected example of linker precedence, module-version fallback, and `/cmd/dev` installation. Its additional distribution/update features are not requirements for a new tool.
+
+Packaging guidance checked 2026-09-22:
+
+- [Git archive attributes](https://git-scm.com/docs/git-archive#ATTRIBUTES): export exclusions and attribute sources.
+- [Go module ZIP rules](https://go.dev/ref/mod#zip-files) and [Go's Git fetcher](https://go.dev/src/cmd/go/internal/modfetch/codehost/git.go): nested-module exclusions and disabled export attributes.
+- [Official module ZIP tools](https://pkg.go.dev/golang.org/x/mod/zip): creation, checking and extraction; inspect the pinned implementation when reproducing Go fetch behavior.

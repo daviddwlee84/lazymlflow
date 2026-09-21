@@ -123,7 +123,8 @@ guided setup, validation, configuration, or shell integration.
   agent and human entry points on the same services; a bundled skill is optional.
 - Read [go-distribution.md](references/go-distribution.md) when preparing a Go
   CLI for other users: start with the actual main-package install path, version
-  reporting, and published tags; add package managers when the release needs them.
+  reporting, published tags, and separate source/module packaging boundaries;
+  add package managers when the release needs them.
 - Read [shell-completion.md](references/shell-completion.md) for native generators,
   user install/status, fpath activation, offline candidates and real shell tests.
 - Read [shell-context.md](references/shell-context.md) when exporting a parent-shell
