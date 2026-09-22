@@ -183,6 +183,7 @@ func NewRoot(options Options) *cobra.Command {
 		return err
 	}})
 	root.AddCommand(a.completionCommand())
+	root.AddCommand(newUpgradeCommand(upgradeOptions{json: &a.jsonOutput, isTerminal: func(*cobra.Command) bool { return options.IsTerminal() }}))
 	return root
 }
 

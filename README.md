@@ -29,6 +29,13 @@ install path is `github.com/daviddwlee84/lazymlflow/cmd/lazymlflow`; no publishe
 release is required to build this checkout. Build a versioned binary with
 `go build -ldflags '-X main.version=v0.1.0' -o bin/lazymlflow ./cmd/lazymlflow`.
 
+For a Homebrew installation, `lazymlflow upgrade` verifies the running binary's
+owning formula, shows the exact `brew upgrade` command, and asks for confirmation.
+Use `lazymlflow upgrade --check --json` for a read-only inspection; noninteractive
+and JSON apply require `--yes`. Other installation methods receive instructions
+without overwriting their binaries. Upgrade does not load MLflow configuration,
+start a server, install Python dependencies, or access tracking data.
+
 Remote metadata and proxied artifacts need only the Go binary. Local stores and
 direct cloud artifact access require either [uv](https://docs.astral.sh/uv/)
 (`uvx`) or an existing Python environment containing MLflow. The default uv

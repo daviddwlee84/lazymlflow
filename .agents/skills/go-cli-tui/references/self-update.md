@@ -1,6 +1,10 @@
 # Go CLI self-update
 
-Read when implementing an explicit `upgrade`/`update` command. A source release
+Read when making a CLI installable, preparing its first release, or implementing
+an explicit `upgrade`/`update` command. Include the existing user's path to the
+next version in the product UX: normally expose an upgrade entry point and a
+read-only check. An intentional omission needs a documented product reason and
+supported external upgrade instructions. A source release
 does not need a release-asset pipeline just to offer a useful updater. Select the
 strategy from the project's published artifacts and the executable being run.
 These are implementation defaults; preserve the product's supported platforms
@@ -13,7 +17,8 @@ and existing command contract.
 | Pure-Go project publishes source tags, no binary assets | Build the selected exact module version with installed native Go, verify, and replace the running copy |
 | Standalone installation; release publishes a matching platform archive and checksums | Download that exact archive, verify its checksum and executable identity, then replace the running copy |
 | Release intentionally omits this platform | Offer a source build only when the project explicitly supports that fallback and its native dependencies |
-| Package manager owns the resolved executable | Report or invoke the owning manager's upgrade command under the command's normal execution policy |
+| A supported package manager owns the resolved executable | Preview its exact command during check; invoke it during explicit apply under the command's normal confirmation policy |
+| Ownership is ambiguous or its manager has no supported adapter | Give actionable manager-specific guidance without mutating or switching install methods |
 | Local, modified, replaced-module, or unrecognized build | Preserve it by default; explain any supported explicit replacement path |
 
 Failure to fetch an expected asset, a missing required checksum, or a checksum
@@ -66,6 +71,36 @@ non-TTY calls never prompt: require explicit apply intent where confirmation is
 part of the command contract, keep stdout machine-readable, and route build
 progress to stderr. Help, version, and embedded skill output remain offline.
 Avoid adding network checks to ordinary startup as a side effect of this feature.
+
+## Delegate supported package managers
+
+When the owner is supported, `tool upgrade` should complete the handoff instead
+of asking the user to copy a command that the tool already knows how to run.
+Keep the existing prompt/`--yes`, non-TTY and JSON contracts; do not add a second
+confirmation layer around an already explicit apply policy. Check mode displays
+the owner, exact target and command but never runs the upgrade.
+
+Identify the installed package from the resolved executable and manager records.
+For Homebrew, use the installed keg/receipt and formula identity, including its
+tap when available. Verify that the selected `brew` uses that same Cellar; a
+second Homebrew on PATH must not redirect the update to another installation.
+Pass one formula as argv to `brew upgrade`, rather than launching a shell or
+upgrading every installed package. Never overwrite the Cellar payload directly.
+
+Let the manager decide its available version. A newer GitHub tag does not prove
+that the formula is updated, and a manager-owned apply must not depend on a
+separate GitHub latest-release lookup. Pins, already-current packages and tap
+lag are valid manager outcomes. Report the effective installed version after
+the command, without claiming the GitHub release was installed merely because
+the manager exited zero. Follow the manager's stable installation link after
+replacement; the running process may still refer to an old keg, and another
+binary earlier on PATH may be unrelated.
+
+Forward progress according to the CLI's output contract, propagate failures
+and cancellation, and leave rollback to the manager. A failed manager command
+does not authorize a standalone download, a source install or `sudo`.
+
+## Prepare source builds
 
 For source builds, check the required native toolchain and dependencies before
 preparing an update. When the contract promises to use installed Go only, set
@@ -128,6 +163,10 @@ injected builder/manager. Keep the real running development tool out of tests.
 | Go-built copy moved outside current `GOBIN`; another copy first on `PATH` | Only the resolved running destination is updated |
 | Local VCS build reports the latest release label and is dirty | Default apply preserves it and explains provenance |
 | Symlink into a package-owned directory | Ownership is recognized; direct replacement is refused |
+| Supported Homebrew install, explicit upgrade | Exact installed formula is delegated to its owning brew; manager progress and exit status are handled |
+| Manager-owned check, missing/wrong-prefix brew, ambiguous receipt | No upgrade or binary staging; accurate plan or actionable unsupported result |
+| Manager succeeds without changing a pinned/current package; tap trails GitHub | Effective installed version is reported; no false latest-version claim or fallback |
+| Manager moves its current link and removes the old keg; PATH contains another copy | Verify the new owning-manager target, not the old running path or PATH shadow |
 | Source-only release; Go absent or too old | Check remains useful; apply gives toolchain guidance and retains the old file |
 | Expected archive download/checksum fails | Failure is reported; no source fallback or old-file change |
 | Staged binary has the wrong version/package/platform | Verification fails before publication |
@@ -139,8 +178,12 @@ them. Add platform execution evidence for every replacement path shipped.
 
 ## Sources and scope
 
-Reviewed 2026-09-20. The transaction and ownership guidance above is original
+Reviewed 2026-09-23. The transaction and ownership guidance above is original
 synthesis; the following primary sources establish the underlying behavior.
+
+- [Homebrew upgrade and Cellar commands](https://docs.brew.sh/Manpage): a named
+  upgrade targets that installed package and respects pins; `--cellar` with a
+  formula reports its version-independent Cellar directory.
 
 - [Go version-qualified installation](https://go.dev/ref/mod#go-install) and
   [toolchain selection](https://go.dev/doc/toolchain): destination, module scope,

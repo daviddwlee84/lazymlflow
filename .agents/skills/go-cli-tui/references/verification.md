@@ -23,6 +23,9 @@ not a claim that a generated application has already passed these checks.
    Build the affected executable using the declared Go version.
 4. Exercise CLI help, intentionally bad input, configured output, and applicable
    dry-run/config inspection against disposable state. Parse JSON as JSON.
+   For a distributed CLI, find its upgrade entry point in help and exercise
+   read-only check plus the supported existing-install upgrade path. Record a
+   deliberate product exemption rather than silently omitting this UX.
 5. Run a real PTY session for changed interaction/terminal behavior. Launch,
    type, paste, switch, resize, open/close overlays, simulate slow/error I/O,
    and exit. Verify shell echo and cursor state afterward.
@@ -53,6 +56,9 @@ its terminal interaction works on that OS.
 | Global --config on a bare wizard entry | Still opens wizard, using the selected config |
 | Unknown flag/invalid value with --interactive | Error before prompting |
 | Pipe/JSON and explicit interactive conflicts | No prompts/progress/ANSI in data; contradictory modes fail clearly |
+| Published CLI installed through a supported package manager | Help exposes upgrade/check; apply invokes the exact owning manager under normal approval policy |
+| Upgrade check, broken product config, unavailable managed backend | Check does not mutate; upgrading the CLI does not require its application backend |
+| Manager no-op, lagging formula, nonzero exit or cancellation | Actual installed result or failure is reported; no fallback to a different installer |
 | Flags, env, file, defaults; explicit false and zero | Expected precedence; missing default config succeeds, explicit missing config fails |
 | XDG override and relative XDG variable | Absolute override used; invalid relative value ignored; state survives cache deletion |
 | Wizard invalid field, Back, upstream-choice change | Answers remain; errors are local; dependent answers are revalidated |

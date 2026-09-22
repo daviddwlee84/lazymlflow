@@ -105,14 +105,22 @@ for commit installs, and keep plain version output independent of the network.
 Test injected precedence, module-version recovery, and the development fallback.
 A test binary often has no release module version: use a small pure resolver
 for deterministic tests and verify an actual installed release afterward.
-Update checks and self-update behavior are separate product features.
+Keep version output offline and make the upgrade journey explicit. A published
+CLI should normally expose `upgrade` and `upgrade --check` (or its established
+equivalent); do not wait for a separate request to notice that installed users
+have no update entry point. Read [self-update.md](self-update.md) during this
+distribution stage. A narrow adapter for a supported package manager is enough;
+unsupported install types can retain clear manual instructions. If this product
+deliberately omits the command, document the reason and external update path.
 
-When an explicit upgrade command is requested, read
-[self-update.md](self-update.md). Choose its strategy from the artifacts actually
+Choose its strategy from the artifacts actually
 published and ownership of the running executable. Build provenance alone does
 not identify an installer, and a moved Go-built binary needs an update at its
 current resolved path. The reference covers source-only releases, verified
 assets, package managers, local-build preservation, and transactional replacement.
+Verify both a fresh install and an existing installation's upgrade/check flow;
+for a manager adapter, exercise its real command boundary with a fake manager
+instead of upgrading the developer's own installation as a generic test.
 
 ## Changelog and release consistency
 

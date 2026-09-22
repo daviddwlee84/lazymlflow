@@ -30,7 +30,8 @@ are opinionated defaults for new tools and features; respect existing contracts.
 
 - [ ] **1. Ground the task.** Read the command tree, services, config, terminal
   setup, and tests. Identify the repeated task, necessary state, target OSes,
-  and whether it needs a command, picker, wizard, or dashboard. Infer from the
+  and whether it needs a command, picker, wizard, or dashboard. For a distributed
+  CLI, include its installation and upgrade paths in the interaction scope. Infer from the
   repo; ask only about consequential product choices that remain unknown.
 - [ ] **2. Define the interaction.** Sketch the primary screen and one complete
   action path using the compact contract below. Record focus, keyboard behavior,
@@ -43,6 +44,8 @@ are opinionated defaults for new tools and features; respect existing contracts.
   programs. Add configuration for actual recurring preferences.
 - [ ] **5. Verify and finish.** Run relevant checks, fix failures, and exercise
   the interaction in a PTY. Report changes, evidence, and untested paths.
+  For a published CLI, verify how an existing installation reaches the next
+  version; a successful fresh install alone does not cover that journey.
   Complete an authorized build request; do not stop after producing a design.
 
 ### Compact interaction contract
@@ -129,12 +132,29 @@ guided setup, validation, configuration, or shell integration.
   user install/status, fpath activation, offline candidates and real shell tests.
 - Read [shell-context.md](references/shell-context.md) when exporting a parent-shell
   environment, owning persistent connections, or generating consumer configuration.
-- Read [self-update.md](references/self-update.md) when adding an upgrade command:
-  choose source, release assets, or the owning package manager from evidence;
-  verify and replace the running copy while preserving local builds by default.
+- Read [self-update.md](references/self-update.md) when making a CLI installable,
+  preparing its first release, or adding an upgrade command.
+  Choose source, release assets, or the owning package manager from evidence;
+  verify the effective installed copy while preserving local builds by default.
 - Read [verification.md](references/verification.md) before declaring an
   interaction implemented. Select applicable cases, use deterministic state
   tests, and exercise a real PTY; screenshots cannot prove input behavior.
+
+## Installed-tool lifecycle
+
+For a CLI with supported, versioned user installations, provide a discoverable
+`upgrade` entry point and a read-only `upgrade --check` by default. Follow an
+established equivalent command name when the project already has one. If the
+product deliberately omits this entry point, record the reason and its supported
+external upgrade path; do not leave it out simply because the task focused on
+the dashboard. Experimental one-off programs need no release machinery.
+
+An explicit upgrade should execute the supported owning package manager under
+the CLI's normal confirmation policy. A recognized, supported Homebrew install
+should not stop at printing `brew upgrade`. Keep manual guidance for unsupported
+or ambiguous ownership. A small manager adapter is enough; this default does not
+require adding a standalone downloader or compiler. Updating the CLI must remain
+separate from updating its managed service, data, or configuration.
 
 ## Gotchas
 
