@@ -13,10 +13,12 @@ import struct
 import sys
 import subprocess
 import tarfile
+import zipfile
 import tempfile
 import time
 
 TARGETS = [(os_name, arch) for os_name in ("darwin", "linux") for arch in ("amd64", "arm64")]
+WINDOWS_SINCE = (0, 3, 0)
 STABLE_TAG = re.compile(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
 
 
@@ -52,8 +54,32 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+
+
+
+
+def windows_required(version):
+    match = re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version)
+    return match is None or tuple(map(int, match.groups())) >= WINDOWS_SINCE
+
+
+def release_targets(version):
+    return TARGETS + ([("windows", arch) for arch in ("amd64", "arm64")] if windows_required(version) else [])
+
+
+def archive_name(project, version, os_name, arch):
+    extension = "zip" if os_name == "windows" else "tar.gz"
+    return f"{project}_{version}_{os_name}_{arch}.{extension}"
+
+
 def verify_binary(data, os_name, arch):
-    if os_name == "linux":
+    if os_name == "windows":
+        valid = False
+        if len(data) >= 64 and data[:2] == b"MZ":
+            offset = struct.unpack_from("<I", data, 60)[0]
+            if offset >= 64 and offset + 26 <= len(data):
+                valid = data[offset:offset+4] == b"PE\0\0" and struct.unpack_from("<H", data, offset+4)[0] == {"amd64": 0x8664, "arm64": 0xaa64}[arch] and struct.unpack_from("<H", data, offset+24)[0] == 0x20b
+    elif os_name == "linux":
         expected = {"amd64": 62, "arm64": 183}[arch]
         valid = len(data) >= 20 and data[:6] == b"\x7fELF\x02\x01" and struct.unpack_from("<H", data, 18)[0] == expected
     else:
@@ -66,7 +92,7 @@ def verify_binary(data, os_name, arch):
 def verify_dist(dist, project, binary, version, smoke=False, tag=None):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.+-]*", version):
         raise ValueError("invalid archive version")
-    expected = {f"{project}_{version}_{os_name}_{arch}.tar.gz": (os_name, arch) for os_name, arch in TARGETS}
+    expected = {archive_name(project, version, os_name, arch): (os_name, arch) for os_name, arch in release_targets(version)}
     source_name = f"{project}_{version}_source.tar.gz" if source_required(version) else None
     expected_names = set(expected) | ({source_name} if source_name else set())
     checksums = {}
@@ -76,41 +102,56 @@ def verify_dist(dist, project, binary, version, smoke=False, tag=None):
             raise ValueError("malformed or duplicate checksum entry")
         checksums[parts[1]] = parts[0]
     if set(checksums) != expected_names:
-        raise ValueError("checksum manifest must name exactly the four release archives and any required source archive")
+        raise ValueError(f"checksum manifest must name exactly the {'six' if windows_required(version) else 'four'} release archives and any required source archive")
     if source_name:
         archive = dist / source_name
         if digest(archive) != checksums[source_name]:
             raise ValueError(f"checksum mismatch: {source_name}")
         verify_source(archive, smoke, tag)
-    required = {binary, "LICENSE", f"completions/{binary}.bash", f"completions/{binary}.zsh"}
-    host = (platform.system().lower(), {"x86_64": "amd64", "aarch64": "arm64"}.get(platform.machine().lower(), platform.machine().lower()))
+    host = (platform.system().lower(), {"x86_64":"amd64","amd64":"amd64","aarch64":"arm64"}.get(platform.machine().lower(), platform.machine().lower()))
     for name, target in expected.items():
         archive = dist / name
         if digest(archive) != checksums[name]:
             raise ValueError(f"checksum mismatch: {name}")
-        with tarfile.open(archive, "r:gz") as stream:
-            members = stream.getmembers()
-            files = [m for m in members if not m.isdir()]
-            if any(not m.isfile() for m in files) or len(files) != len(required) or {m.name for m in files} != required:
-                raise ValueError(f"unexpected archive entries: {name}")
-            if any(m.name not in {"completions", "completions/"} for m in members if m.isdir()):
-                raise ValueError(f"unexpected archive directory: {name}")
-            payload = stream.extractfile(binary).read()
-            verify_binary(payload, *target)
-            if stream.getmember(binary).mode & 0o111 == 0:
-                raise ValueError(f"binary is not executable: {name}")
-            for member in required - {binary}:
-                if not stream.extractfile(member).read().strip():
-                    raise ValueError(f"empty release file: {member}")
-            if smoke and target == host:
-                with tempfile.TemporaryDirectory(prefix="release-smoke-") as temporary:
-                    executable = Path(temporary) / binary
-                    executable.write_bytes(payload)
-                    executable.chmod(0o755)
-                    version_output = subprocess.check_output([str(executable), "--version"], text=True, timeout=20).strip()
-                    subprocess.run([str(executable), "--help"], check=True, stdout=subprocess.DEVNULL, timeout=20)
-                    if tag and tag not in version_output:
-                        raise ValueError(f"binary version does not report {tag}")
+        exe = binary + (".exe" if target[0] == "windows" else "")
+        required = {exe, "LICENSE", f"completions/{binary}.bash", f"completions/{binary}.zsh"}
+        if windows_required(version):
+            required.add(f"completions/{binary}.ps1")
+        if target[0] == "windows":
+            with zipfile.ZipFile(archive) as stream:
+                members = stream.infolist()
+                files = [m for m in members if not m.is_dir()]
+                if len(files) != len(required) or {m.filename for m in files} != required:
+                    raise ValueError(f"unexpected archive entries: {name}")
+                if any(m.filename not in {"completions/"} for m in members if m.is_dir()):
+                    raise ValueError(f"unexpected archive directory: {name}")
+                if any(((m.external_attr >> 16) & 0o170000) not in (0, 0o100000) or m.file_size > 256*1024*1024 for m in files):
+                    raise ValueError(f"unsafe ZIP entry: {name}")
+                contents = {m.filename: stream.read(m) for m in files}
+        else:
+            with tarfile.open(archive, "r:gz") as stream:
+                members = stream.getmembers()
+                files = [m for m in members if not m.isdir()]
+                if any(not m.isfile() for m in files) or len(files) != len(required) or {m.name for m in files} != required:
+                    raise ValueError(f"unexpected archive entries: {name}")
+                if any(m.name not in {"completions", "completions/"} for m in members if m.isdir()):
+                    raise ValueError(f"unexpected archive directory: {name}")
+                if stream.getmember(exe).mode & 0o111 == 0:
+                    raise ValueError(f"binary is not executable: {name}")
+                contents = {m.name: stream.extractfile(m).read() for m in files}
+        payload = contents[exe]
+        verify_binary(payload, *target)
+        if any(not contents[member].strip() for member in required - {exe}):
+            raise ValueError(f"empty release file: {name}")
+        if smoke and target == host:
+            with tempfile.TemporaryDirectory(prefix="release-smoke-") as temporary:
+                executable = Path(temporary) / exe
+                executable.write_bytes(payload)
+                executable.chmod(0o755)
+                version_output = subprocess.check_output([str(executable), "--version"], text=True, timeout=20).strip()
+                subprocess.run([str(executable), "--help"], check=True, stdout=subprocess.DEVNULL, timeout=20)
+                if tag and tag not in version_output:
+                    raise ValueError(f"binary version does not report {tag}")
     return {name: dist / name for name in sorted(expected_names)} | {"checksums.txt": dist / "checksums.txt"}
 
 
@@ -221,11 +262,11 @@ def completions(main, binary):
     with tempfile.TemporaryDirectory(prefix="release-completions-") as temporary:
         executable = Path(temporary) / binary
         subprocess.run(["go", "build", "-trimpath", "-o", str(executable), main], check=True)
-        for shell in ("bash", "zsh"):
+        for shell in ("bash", "zsh", "powershell"):
             generated = subprocess.check_output([str(executable), "completion", shell], timeout=30)
             if not generated.strip():
                 raise ValueError(f"empty {shell} completion")
-            (output / f"{binary}.{shell}").write_bytes(generated)
+            (output / f"{binary}.{'ps1' if shell == 'powershell' else shell}").write_bytes(generated)
 
 
 def main():

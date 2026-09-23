@@ -8,7 +8,7 @@ builds:
     main: ./cmd/lazymlflow
     binary: lazymlflow
     env: [CGO_ENABLED=0]
-    goos: [darwin, linux]
+    goos: [darwin, linux, windows]
     goarch: [amd64, arm64]
     flags: [-trimpath, -buildvcs=false]
     mod_timestamp: "{{ .CommitTimestamp }}"
@@ -16,6 +16,9 @@ builds:
       - -s -w -X main.version={{ .Tag }}
 archives:
   - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     builds_info:
       mtime: "{{ .CommitDate }}"

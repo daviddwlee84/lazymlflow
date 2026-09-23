@@ -123,3 +123,8 @@ jobs:
       - run: go build -o bin/lazymlflow ./cmd/lazymlflow
       - if: hashFiles('scripts/integration_server.py') != ''
         run: python3 scripts/integration_server.py --binary ./bin/lazymlflow --profiles "${{ matrix.profile }}"
+
+  windows-distribution:
+    uses: ./.github/workflows/windows.yml
+    with:
+      ref: ${{ inputs.ref || github.ref }}
