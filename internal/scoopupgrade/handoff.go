@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -339,9 +340,15 @@ func runHelper(r request, dir string) int {
 	}
 	// Scoop can exit zero after skipping an in-use app. Treat that as blocked,
 	// not a successful update; never enable IGNORE_RUNNING_PROCESSES.
-	logData, _ := readLimited(result.LogPath, 8<<20)
+	logData, logErr := readLimited(result.LogPath, 8<<20)
+	if logErr != nil {
+		return finish("failed", "Scoop output could not be fully verified; inspect the progress log.")
+	}
 	if bytesContainRunningSkip(logData) {
 		return finish("blocked", "Scoop skipped a running package; close its other instances and retry.")
+	}
+	if managerReportedError(logData) {
+		return finish("failed", "Scoop reported an error despite its exit status; inspect the progress log. No other installer was attempted.")
 	}
 	current, err := canonical(r.StablePath)
 	if err != nil {
@@ -376,4 +383,11 @@ func replaceEnv(env []string, key, value string) []string {
 		}
 	}
 	return append(result, key+"="+value)
+}
+
+var managerANSI = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
+var managerError = regexp.MustCompile(`(?m)(?:^|[\r\n\t ])ERROR[ :!]`)
+
+func managerReportedError(data []byte) bool {
+	return managerError.Match(managerANSI.ReplaceAll(data, nil))
 }

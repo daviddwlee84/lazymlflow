@@ -84,7 +84,9 @@ with tempfile.TemporaryDirectory(prefix='scoop handoff ') as scratch:
             assert initial['status']=='handed-off',initial
             deadline=time.monotonic()+120
             while time.monotonic()<deadline:
-                state=decode(run(initial['status_command'],env=env))
+                queried=subprocess.run(initial['status_command'],env=env,capture_output=True,text=True,timeout=30)
+                state=decode(queried.stdout)
+                assert queried.returncode==0 or (a.project=='exp-cli' and queried.returncode==1 and state.get('status') in ('blocked','failed','canceled','interrupted')),(queried.returncode,queried.stdout,queried.stderr)
                 if state['status'] in ['updated','up-to-date','blocked','failed','canceled','interrupted']:
                     if state['status']!=expected:
                         log=Path(state['log_path'])

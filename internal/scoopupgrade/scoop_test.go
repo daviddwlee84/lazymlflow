@@ -156,3 +156,16 @@ func TestScoopSkippedRunningProcessIsNotSuccess(t *testing.T) {
 		t.Fatal("no-op mislabeled blocked")
 	}
 }
+
+func TestManagerExitZeroDoesNotHideScoopErrors(t *testing.T) {
+	for _, output := range []string{"Checking hash ... ERROR Hash check failed!", "\x1b[31mERROR Download failed\x1b[0m", "ERROR: installation failed"} {
+		if !managerReportedError([]byte(output)) {
+			t.Fatalf("missed manager error: %q", output)
+		}
+	}
+	for _, output := range []string{"tool is already up to date", "Downloading https://example.test/error-reporting.zip", "No errors reported"} {
+		if managerReportedError([]byte(output)) {
+			t.Fatalf("misclassified progress: %q", output)
+		}
+	}
+}
