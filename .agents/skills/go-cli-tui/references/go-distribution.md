@@ -147,6 +147,14 @@ Homebrew tap can follow macOS/Linux release assets. Do not couple an early
 source release to upstream Homebrew acceptance, Windows packaging, or automatic
 updates unless they are part of the task.
 
+When adding Windows packages, validate ZIP members and PE architecture, run the
+native executable and completion, and exercise the selected manager's upgrade
+flow. Cross-compilation alone does not establish runtime support. Preserve each
+published tag's archive contract when adding platforms or completion files;
+introduce the new inventory at a fresh version instead of replacing old assets.
+Keep installed owners stable when adding a suite-wide installation switch, and
+separate install-only apply from explicit updates of already-installed tools.
+
 Keep source installs and packaged releases on the same public version contract.
 If an operational skill is embedded, it travels with each binary; end users need
 no separate `npx skills` update for `--skill` output. A separately installed skill

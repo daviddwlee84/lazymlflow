@@ -100,6 +100,37 @@ Forward progress according to the CLI's output contract, propagate failures
 and cancellation, and leave rollback to the manager. A failed manager command
 does not authorize a standalone download, a source install or `sudo`.
 
+## Windows Scoop handoff
+
+Scoop checks for processes whose executable lives under the installed app's
+folder and can skip their update. Calling it synchronously while that same
+binary remains alive cannot complete the normal upgrade. Choose an explicit
+external upgrade path or an approved handoff appropriate to the product; do not
+turn off Scoop's running-process protection or terminate unrelated instances.
+
+For an asynchronous handoff, put the helper and its working directory outside
+the installed package, bind the reviewed owner/receipt and the initiating
+process identity, and wait for that exact process to exit. Authorize the request
+once. Distinguish accepted/running work from completed, blocked, failed or
+interrupted work, with a durable result and discoverable read-only query.
+A query should not itself start the package being replaced: an out-of-package
+status command or reading the result file avoids that conflict. A host job may
+retain lifetime control; report that limitation instead of claiming the helper
+is guaranteed to survive terminal closure.
+
+Verify the effective `current` target, bucket and actual product/version after
+Scoop returns. Its exit code alone is insufficient: inspected Scoop source can
+print an `ERROR` (including failed archive hash verification) and finish the
+outer update command with zero. Treat explicit manager errors and unverified
+outcomes as failures, not an already-current package; retain bounded diagnostic
+logs without exposing credentials. An unknown/partial change is not rollback.
+
+Windows junctions and ACLs need native verification. Unix execute/permission
+bits do not establish Windows executability or privacy. Keep embedded scripts,
+skills and checksum fixtures byte-stable across Git checkout line endings.
+Use native Windows process/terminal tests in addition to PE/header and cross-
+compilation checks. Keep actual developer installations outside test scope.
+
 ## Prepare source builds
 
 For source builds, check the required native toolchain and dependencies before
@@ -164,6 +195,8 @@ injected builder/manager. Keep the real running development tool out of tests.
 | Local VCS build reports the latest release label and is dirty | Default apply preserves it and explains provenance |
 | Symlink into a package-owned directory | Ownership is recognized; direct replacement is refused |
 | Supported Homebrew install, explicit upgrade | Exact installed formula is delegated to its owning brew; manager progress and exit status are handled |
+| Scoop running-instance policy, helper handoff and safe status polling | Original process exits; one exact package updates; another live instance blocks; querying does not hold the installed image open |
+| Scoop prints an error but exits zero; helper is replayed or interrupted | Failure/interruption stays visible; no false success, duplicate update or overwritten completed result |
 | Manager-owned check, missing/wrong-prefix brew, ambiguous receipt | No upgrade or binary staging; accurate plan or actionable unsupported result |
 | Manager succeeds without changing a pinned/current package; tap trails GitHub | Effective installed version is reported; no false latest-version claim or fallback |
 | Manager moves its current link and removes the old keg; PATH contains another copy | Verify the new owning-manager target, not the old running path or PATH shadow |
@@ -185,6 +218,12 @@ synthesis; the following primary sources establish the underlying behavior.
   upgrade targets that installed package and respects pins; `--cellar` with a
   formula reports its version-independent Cellar directory.
 
+- Inspected Scoop at `b588a06e41d920d2123ec70aee682bae14935939` on
+  2026-09-23: [update process guard and outer exit](https://github.com/ScoopInstaller/Scoop/blob/b588a06e41d920d2123ec70aee682bae14935939/libexec/scoop-update.ps1),
+  [running-image lookup](https://github.com/ScoopInstaller/Scoop/blob/b588a06e41d920d2123ec70aee682bae14935939/lib/install.ps1), and
+  [error output helper](https://github.com/ScoopInstaller/Scoop/blob/b588a06e41d920d2123ec70aee682bae14935939/lib/core.ps1).
+  Scope: these manager boundaries, plus isolated Windows install/update probes;
+  this is not an audit of every Scoop hook or future release.
 - [Go version-qualified installation](https://go.dev/ref/mod#go-install) and
   [toolchain selection](https://go.dev/doc/toolchain): destination, module scope,
   and installed-toolchain controls.

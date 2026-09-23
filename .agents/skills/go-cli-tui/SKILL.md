@@ -153,7 +153,9 @@ An explicit upgrade should execute the supported owning package manager under
 the CLI's normal confirmation policy. A recognized, supported Homebrew install
 should not stop at printing `brew upgrade`. Keep manual guidance for unsupported
 or ambiguous ownership. A small manager adapter is enough; this default does not
-require adding a standalone downloader or compiler. Updating the CLI must remain
+require adding a standalone downloader or compiler. When a manager requires the
+running program to exit, expose an observable handoff and a final-result query;
+accepted work is not completed work. Updating the CLI must remain
 separate from updating its managed service, data, or configuration.
 
 ## Gotchas

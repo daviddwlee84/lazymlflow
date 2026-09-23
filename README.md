@@ -7,16 +7,46 @@ evidence-based summaries and reusable prompts. Remote tracking uses the public R
 `mlruns` and SQLite targets run an owned, temporary **official MLflow server**;
 lazymlflow does not implement MLflow's storage format or database schema.
 
-Tagged [GitHub releases](https://github.com/daviddwlee84/lazymlflow/releases) provide macOS/Linux amd64/arm64 archives, SHA-256 checksums, and Bash/Zsh completions. Verify the matching archive against `checksums.txt` before installing it. Source release archives and Go module downloads omit conversation records and agent plans while retaining build resources. See [RELEASING.md](RELEASING.md).
+Tagged [GitHub releases](https://github.com/daviddwlee84/lazymlflow/releases) provide macOS/Linux/Windows amd64/arm64 archives, SHA-256 checksums, and Bash/Zsh completions. Verify the matching archive against `checksums.txt` before installing it. Source release archives and Go module downloads omit conversation records and agent plans while retaining build resources. See [RELEASING.md](RELEASING.md).
 
 Optional workflows recommend and create persistent MLflow servers, prepare
 training environments, inspect registered/logged models, and export model
 artifacts with manifests that CI can verify. Browsing remains read-only;
 server provisioning is an explicit, separate operation.
 
+## Windows installation and upgrades
+
+```powershell
+scoop bucket add daviddwlee84 https://github.com/daviddwlee84/scoop-bucket
+scoop install daviddwlee84/lazymlflow
+lazymlflow upgrade --check --json
+lazymlflow upgrade --yes
+```
+
+Windows v0.3.0+ releases include amd64/arm64 ZIPs and PowerShell completion.
+Scoop owns the installed executable. Upgrade verifies its receipt, current
+junction, product identity and manager, then starts a private helper outside the
+package and exits so Scoop can replace the executable. Interactive use opens a
+progress window. A `handed-off` result confirms acceptance; only the later
+`updated` or `up-to-date` result confirms successful completion.
+
+For automation, add `--json` and run the returned `status_command` to poll the
+private helper. Do not poll the installed executable during the update, because
+Scoop refuses to update a running package. Once finished,
+`lazymlflow upgrade --status <operation-id> --json` reads the saved result.
+If the launching host retains process lifetime control, keep that terminal open
+until the final result. Interrupted, canceled, blocked and failed operations
+retain their status and log paths; none claims successful rollback or falls
+back to another installer. Close other instances before retrying.
+
+`--check` is read-only and does not refresh buckets or promise a remote latest
+version. Successful completion reports the version actually installed. Manually
+extracted Windows ZIPs need manual replacement while closed; package ownership and Windows process guards cannot be overridden. Installing the CLI does not
+configure its backends, services or credentials.
+
 ## Build and run
 
-Requires Go 1.25 or newer. macOS and Linux are the primary supported platforms.
+Requires Go 1.25 or newer. Releases support macOS, Linux and Windows; MLflow runtimes and shell exporters retain their own platform requirements.
 
 ```sh
 go build -o bin/lazymlflow ./cmd/lazymlflow

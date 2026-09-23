@@ -57,6 +57,8 @@ its terminal interaction works on that OS.
 | Unknown flag/invalid value with --interactive | Error before prompting |
 | Pipe/JSON and explicit interactive conflicts | No prompts/progress/ANSI in data; contradictory modes fail clearly |
 | Published CLI installed through a supported package manager | Help exposes upgrade/check; apply invokes the exact owning manager under normal approval policy |
+| Manager requires the installed process to exit | Handoff is observable, safe status polling does not block the manager, and completion is verified independently of acceptance |
+| Windows junction/ACL, another running instance, manager error with zero exit | Actual ownership and outcome are verified on Windows; neither Unix mode bits nor process exit code alone prove success |
 | Upgrade check, broken product config, unavailable managed backend | Check does not mutate; upgrading the CLI does not require its application backend |
 | Manager no-op, lagging formula, nonzero exit or cancellation | Actual installed result or failure is reported; no fallback to a different installer |
 | Flags, env, file, defaults; explicit false and zero | Expected precedence; missing default config succeeds, explicit missing config fails |
