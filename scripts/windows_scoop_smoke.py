@@ -45,7 +45,14 @@ with tempfile.TemporaryDirectory(prefix='scoop handoff ') as scratch:
         run([go,'build','-ldflags',flags,'-o',str(binary),a.main],cwd=repo)
         assert v in run([str(binary),'--version'])
         binaries[v]=binary
-    handler=functools.partial(http.server.SimpleHTTPRequestHandler,directory=str(assets))
+    download_started=threading.Event();release_download=threading.Event()
+    class FixtureHandler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.endswith('/interrupted.zip'):
+                download_started.set()
+                release_download.wait(30)
+            super().do_GET()
+    handler=functools.partial(FixtureHandler,directory=str(assets))
     server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler)
     threading.Thread(target=server.serve_forever,daemon=True).start()
     try:
@@ -114,8 +121,25 @@ with tempfile.TemporaryDirectory(prefix='scoop handoff ') as scratch:
         set_manifest('v0.0.2',bad_hash=True,advertised='0.0.3')
         apply('failed')
         assert 'v0.0.2' in run([str(exe),'--version'],env=env), 'checksum failure changed the installed version'
+        # Hold a real manager download, terminate only the helper tree created
+        # by this fixture, and verify read-only polling reports interruption.
+        slow=assets/'interrupted.zip';shutil.copyfile(assets/(a.binary+'-v0.0.2.zip'),slow)
+        pending=json.loads(manifest.read_text());pending['version']='0.0.4'
+        pending['architecture']['64bit']={'url':f'http://127.0.0.1:{server.server_port}/interrupted.zip','hash':hashlib.sha256(slow.read_bytes()).hexdigest()}
+        manifest.write_text(json.dumps(pending))
+        initial=decode(run([str(exe),'upgrade','--json']+([] if a.binary=='lazyclash' else ['--yes']),env=env))
+        assert initial['status']=='handed-off',initial
+        try:
+            assert download_started.wait(60),'manager did not reach the held fixture download'
+            run([str(Path(os.environ['SystemRoot'])/'System32/taskkill.exe'),'/PID',str(initial['helper_pid']),'/T','/F'],env=env)
+            queried=subprocess.run(initial['status_command'],env=env,capture_output=True,text=True,timeout=30)
+            state=decode(queried.stdout)
+            assert state['status']=='interrupted' and not state['change_known'],state
+            assert 'v0.0.2' in run([str(exe),'--version'],env=env),'interrupted download changed current version'
+            records.append({'case':'manager-download-interrupted','status':state['status'],'change_known':state['change_known']})
+        finally:release_download.set()
         assert hashlib.sha256(old.read_bytes()).hexdigest()==old_hash,'old version payload was unexpectedly overwritten'
         output=repo/'build/windows-scoop-smoke.json';output.parent.mkdir(exist_ok=True)
         output.write_text(json.dumps({'scoop_source':SCOOP_SHA,'project':a.project,'cases':records},indent=2))
         print(output.read_text())
-    finally:server.shutdown();server.server_close()
+    finally:release_download.set();server.shutdown();server.server_close()

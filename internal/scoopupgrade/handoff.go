@@ -253,6 +253,12 @@ func HandleHelper(product Product) (int, bool) {
 }
 
 func runHelper(r request, dir string) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	return runHelperContext(ctx, r, dir)
+}
+
+func runHelperContext(ctx context.Context, r request, dir string) int {
 	result := Report{Status: "waiting", Manager: "scoop", Package: r.Package, Bucket: r.Bucket, CurrentVersion: r.Version,
 		Path: r.StablePath, Command: r.command(), CanUpgrade: true, OperationID: r.OperationID,
 		ResultPath: filepath.Join(dir, "result.json"), LogPath: filepath.Join(dir, "progress.log"),
@@ -273,8 +279,6 @@ func runHelper(r request, dir string) int {
 	defer log.Close()
 	output, closeConsole := helperConsole(r.Interactive, log)
 	defer closeConsole()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 	finish := func(status, reason string) int {
 		result.Status, result.Reason = status, reason
 		if err := writeJSON(result.ResultPath, result); err != nil {
