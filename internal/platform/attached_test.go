@@ -100,7 +100,25 @@ func TestAttachedExecutableUsesChildPATH(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := attachedExecutable("custom-tool", []string{"PATH=" + dir})
-	if err != nil || got != path {
+	if err != nil || !strings.EqualFold(got, path) {
 		t.Fatalf("custom PATH: %q %v", got, err)
+	}
+}
+
+func TestAttachedWindowsUsesChildPathCaseAndExtensions(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows environment and executable lookup contract")
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "fixture.native")
+	if err := os.WriteFile(p, []byte("lookup only"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := attachedExecutable("fixture", []string{"Path=" + dir, "Pathext=.native"})
+	if err != nil || got != p {
+		t.Fatalf("child lookup: %q %v", got, err)
+	}
+	if _, err = attachedExecutable("fixture", []string{"Path=" + dir, "PATHEXT=.EXE"}); err == nil {
+		t.Fatal("ignored child PATHEXT")
 	}
 }

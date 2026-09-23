@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -77,22 +78,40 @@ func attachedExecutable(name string, env []string) (string, error) {
 	if strings.ContainsAny(name, `/\`) {
 		return name, nil
 	}
-	search := ""
+	search, pathExt := "", ".COM;.EXE;.BAT;.CMD"
 	for _, item := range env {
-		if strings.HasPrefix(item, "PATH=") {
-			search = strings.TrimPrefix(item, "PATH=")
+		key, value, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		if key == "PATH" || (runtime.GOOS == "windows" && strings.EqualFold(key, "PATH")) {
+			search = value
+		}
+		if runtime.GOOS == "windows" && strings.EqualFold(key, "PATHEXT") {
+			pathExt = value
+		}
+	}
+	names := []string{name}
+	if runtime.GOOS == "windows" && filepath.Ext(name) == "" {
+		names = nil
+		for _, ext := range strings.Split(pathExt, ";") {
+			if strings.HasPrefix(ext, ".") && !strings.ContainsAny(ext, `/\\`) {
+				names = append(names, name+ext)
+			}
 		}
 	}
 	for _, directory := range filepath.SplitList(search) {
 		if directory == "" {
 			directory = "."
 		}
-		path := filepath.Join(directory, name)
-		if info, err := os.Stat(path); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
-			if !filepath.IsAbs(path) {
-				return "", fmt.Errorf("command %q resolves relative to the current directory; use an explicit ./ path", name)
+		for _, candidate := range names {
+			path := filepath.Join(directory, candidate)
+			if info, err := os.Stat(path); err == nil && !info.IsDir() && (runtime.GOOS == "windows" || info.Mode()&0111 != 0) {
+				if !filepath.IsAbs(path) {
+					return "", fmt.Errorf("command %q resolves relative to the current directory; use an explicit ./ path", name)
+				}
+				return path, nil
 			}
-			return path, nil
 		}
 	}
 	return "", fmt.Errorf("command %q was not found in the target PATH", name)
