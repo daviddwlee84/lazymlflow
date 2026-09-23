@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -96,7 +97,7 @@ func TestPersistenceIsolationAndRestore(t *testing.T) {
 	}
 	for p, mode := range map[string]os.FileMode{path: 0600, filepath.Dir(path): 0700} {
 		info, err := os.Stat(p)
-		if err != nil || info.Mode().Perm() != mode {
+		if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != mode) {
 			t.Fatalf("permissions %s: %v %v", p, info, err)
 		}
 	}

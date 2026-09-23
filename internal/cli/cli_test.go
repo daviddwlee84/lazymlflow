@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/daviddwlee84/lazymlflow/internal/fileuri"
 	"math"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -309,7 +311,7 @@ func TestDashboardNormalizesAndDoesNotPersistTransient(t *testing.T) {
 		if o.InitialTarget != "temporary-2" || len(o.Targets) != 2 {
 			t.Fatalf("dashboard options %#v", o)
 		}
-		if o.Targets[0].TrackingURI != "file://"+filepath.Join(dir, "mlruns") {
+		if o.Targets[0].TrackingURI != (&url.URL{Scheme: "file", Path: fileuri.Path(filepath.Join(dir, "mlruns"))}).String() {
 			t.Fatalf("relative path not resolved: %#v", o.Targets[0])
 		}
 		return o.SaveTargets(o.Targets, o.InitialTarget)

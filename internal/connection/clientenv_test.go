@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -23,7 +24,7 @@ func environmentMap(env []string) map[string]string {
 
 func TestClientEnvPlanKeepsReferencesAndIsolatesProfile(t *testing.T) {
 	env := []string{"PATH=/bin", "LAB_TOKEN=credential-value", "MLFLOW_TRACKING_TOKEN=other", "MLFLOW_TRACKING_USERNAME=other-user", "MLFLOW_SERVER_WORKERS=99", "_MLFLOW_SERVER_FILE_STORE=other", "MLFLOW_TRACKING_INSECURE_TLS=true", "MLFLOW_TRACKING_AUTH=other-plugin", "MLFLOW_TRACKING_AWS_SIGV4=true", "MLFLOW_TRACKING_CLIENT_CERT_PATH=/other.pem", "AWS_PROFILE=ambient", "PROFILE_SOURCE=chosen", "MLFLOW_S3_ENDPOINT_URL=https://objects.example.com"}
-	target := core.Target{ID: "lab", TrackingURI: "https://mlflow.example.com/tracking", TokenEnv: "LAB_TOKEN", CAFile: "/tmp/lab.pem", Env: map[string]string{"AWS_PROFILE": "PROFILE_SOURCE"}}
+	target := core.Target{ID: "lab", TrackingURI: "https://mlflow.example.com/tracking", TokenEnv: "LAB_TOKEN", CAFile: filepath.Join(t.TempDir(), "lab.pem"), Env: map[string]string{"AWS_PROFILE": "PROFILE_SOURCE"}}
 	plan, err := clientEnvironmentPlan(target, target.TrackingURI, env)
 	if err != nil {
 		t.Fatal(err)
@@ -68,6 +69,9 @@ func TestClientEnvShellQuotesAndSimultaneousReferences(t *testing.T) {
 	wantMap := environmentMap(wanted)
 	for _, shell := range []string{"sh", "bash", "zsh"} {
 		t.Run(shell, func(t *testing.T) {
+			if runtime.GOOS == "windows" {
+				t.Skip("POSIX export execution is verified on native Unix; Git Bash rewrites PATH during startup")
+			}
 			path, err := exec.LookPath(shell)
 			if err != nil {
 				t.Skip("shell unavailable")

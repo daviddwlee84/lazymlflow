@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -88,7 +89,7 @@ func TestInitPrivateAndImmutable(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if stat.Mode().Perm() != 0600 {
+		if runtime.GOOS != "windows" && stat.Mode().Perm() != 0600 {
 			t.Fatalf("%s mode %o", file, stat.Mode().Perm())
 		}
 	}
@@ -173,7 +174,7 @@ func TestIPv6AndLiteralDollarRendering(t *testing.T) {
 		t.Fatalf("invalid IPv6 Caddy site: %s", caddy)
 	}
 	compose, _ := os.ReadFile(filepath.Join(dir, "compose.yaml"))
-	if !strings.Contains(string(compose), "user$$literal") || !strings.Contains(string(compose), "/$$literal") {
+	if !strings.Contains(string(compose), "user$$literal") || !strings.Contains(strings.ReplaceAll(string(compose), `\`, "/"), "/$$literal") {
 		t.Fatal("literal Compose interpolation was not escaped")
 	}
 }

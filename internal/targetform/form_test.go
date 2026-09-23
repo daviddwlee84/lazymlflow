@@ -1,6 +1,8 @@
 package targetform
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,7 +29,7 @@ func press(m *Model, key string) tea.Cmd {
 	return cmd
 }
 func draft() core.Target {
-	return core.Target{ID: "local", Name: "Existing", TrackingURI: "http://localhost:5000", Python: "/project/.venv", MLflowVersion: "3.12.0", TokenEnv: "MLFLOW_TRACKING_TOKEN", Env: map[string]string{"AWS_PROFILE": "MY_AWS_PROFILE"}}
+	return core.Target{ID: "local", Name: "Existing", TrackingURI: "http://localhost:5000", Python: filepath.Join(os.TempDir(), "project", ".venv"), MLflowVersion: "3.12.0", TokenEnv: "MLFLOW_TRACKING_TOKEN", Env: map[string]string{"AWS_PROFILE": "MY_AWS_PROFILE"}}
 }
 func TestSharedFormReviewPreservesRuntimeAndAdvancedValues(t *testing.T) {
 	m := New(draft(), "/tmp/config.toml", false)
@@ -44,13 +46,13 @@ func TestSharedFormReviewPreservesRuntimeAndAdvancedValues(t *testing.T) {
 		t.Fatalf("did not enter review: %v", m.Err)
 	}
 	view := m.View(120, 25)
-	for _, want := range []string{"/tmp/config.toml", "/project/.venv", "http://localhost:5000"} {
+	for _, want := range []string{"/tmp/config.toml", filepath.Join(os.TempDir(), "project", ".venv"), "http://localhost:5000"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("review missing %q: %s", want, view)
 		}
 	}
 	press(m, "enter")
-	if !m.Done || m.Target.Python != "/project/.venv" || m.Target.MLflowVersion != "3.12.0" || m.Target.TokenEnv != "MLFLOW_TRACKING_TOKEN" || m.Target.Env["AWS_PROFILE"] != "MY_AWS_PROFILE" {
+	if !m.Done || m.Target.Python != filepath.Join(os.TempDir(), "project", ".venv") || m.Target.MLflowVersion != "3.12.0" || m.Target.TokenEnv != "MLFLOW_TRACKING_TOKEN" || m.Target.Env["AWS_PROFILE"] != "MY_AWS_PROFILE" {
 		t.Fatalf("runtime/advanced config changed: %#v", m.Target)
 	}
 }

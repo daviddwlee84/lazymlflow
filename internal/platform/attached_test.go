@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -90,7 +91,11 @@ func TestRunAttachedCancellationAndMissingExecutable(t *testing.T) {
 
 func TestAttachedExecutableUsesChildPATH(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "custom-tool")
+	name := "custom-tool"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
 		t.Fatal(err)
 	}

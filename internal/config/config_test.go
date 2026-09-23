@@ -159,7 +159,7 @@ tracking_uri = "https://other.test"
 	if err = c.Save(path); err != nil {
 		t.Fatal("repeat save:", err)
 	}
-	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
+	if info, err := os.Stat(path); err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0600) {
 		t.Fatal("permissions changed", err)
 	}
 }
