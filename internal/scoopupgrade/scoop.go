@@ -60,7 +60,9 @@ type Report struct {
 	Path           string   `json:"path,omitempty"`
 	Command        []string `json:"command,omitempty"`
 	CanUpgrade     bool     `json:"can_upgrade"`
+	ChangeKnown    bool     `json:"change_known"`
 	Changed        bool     `json:"changed"`
+	StatusCommand  []string `json:"status_command,omitempty"`
 	OperationID    string   `json:"operation_id,omitempty"`
 	ResultPath     string   `json:"result_path,omitempty"`
 	LogPath        string   `json:"log_path,omitempty"`
@@ -228,7 +230,7 @@ func Prepare(ctx context.Context, executable string, product Product, opts Optio
 		Architecture string `json:"architecture"`
 	}
 	data, err := readLimited(receiptPath, 1<<20)
-	if err != nil || json.Unmarshal(data, &receipt) != nil || !component.MatchString(receipt.Bucket) {
+	if err != nil || json.Unmarshal(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}), &receipt) != nil || !component.MatchString(receipt.Bucket) {
 		return plan, errors.New("Scoop receipt has no unambiguous installed bucket")
 	}
 	if receipt.Architecture != "64bit" && receipt.Architecture != "arm64" {
@@ -268,7 +270,7 @@ func Prepare(ctx context.Context, executable string, product Product, opts Optio
 	}
 	var manifestData map[string]any
 	data, err = readLimited(manifest, 4<<20)
-	if err != nil || json.Unmarshal(data, &manifestData) != nil || hexHash(data) != files[2].Hash {
+	if err != nil || json.Unmarshal(bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf}), &manifestData) != nil || hexHash(data) != files[2].Hash {
 		return plan, errors.New("invalid or changing installed Scoop manifest")
 	}
 	version, err := opts.Inspect(ctx, resolved)

@@ -62,11 +62,11 @@ with tempfile.TemporaryDirectory(prefix='scoop handoff ') as scratch:
         bucket=scoop/'buckets/fixture/bucket';bucket.mkdir(parents=True)
         package='installed-'+a.project
         manifest=bucket/(package+'.json')
-        def set_manifest(v, bad_hash=False):
+        def set_manifest(v, bad_hash=False, advertised=None):
             archive=assets/(a.binary+'-'+v+'.zip')
             with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as z: z.write(binaries[v],a.binary+'.exe')
             digest=hashlib.sha256(archive.read_bytes()).hexdigest()
-            manifest.write_text(json.dumps({'version':v[1:],'description':'isolated manager acceptance','homepage':'https://example.invalid','license':'MIT','architecture':{'64bit':{'url':f'http://127.0.0.1:{server.server_port}/{archive.name}','hash':'0'*64 if bad_hash else digest}},'bin':a.binary+'.exe'}))
+            manifest.write_text(json.dumps({'version':advertised or v[1:],'description':'isolated manager acceptance','homepage':'https://example.invalid','license':'MIT','architecture':{'64bit':{'url':f'http://127.0.0.1:{server.server_port}/{archive.name}','hash':'0'*64 if bad_hash else digest}},'bin':a.binary+'.exe'}))
         scoop_cmd=[pwsh,'-NoLogo','-NoProfile','-File',str(manager/'bin/scoop.ps1')]
         set_manifest('v0.0.1')
         run(scoop_cmd+['install','fixture/'+package],env=env)
@@ -84,11 +84,12 @@ with tempfile.TemporaryDirectory(prefix='scoop handoff ') as scratch:
             assert initial['status']=='handed-off',initial
             deadline=time.monotonic()+120
             while time.monotonic()<deadline:
-                state=decode(run([str(exe),'upgrade','--status',initial['operation_id'],'--json'],env=env))
+                state=decode(run(initial['status_command'],env=env))
                 if state['status'] in ['updated','up-to-date','blocked','failed','canceled','interrupted']:
                     if state['status']!=expected:
                         log=Path(state['log_path'])
                         raise AssertionError((expected,state,log.read_text(errors='replace') if log.exists() else 'no log'))
+                    assert state['change_known'] == (expected in ('updated','up-to-date')),state
                     records.append({'case':expected,'operation_id':initial['operation_id'],'status':state['status'],'version':state.get('version')})
                     return state
                 time.sleep(.2)
@@ -96,15 +97,21 @@ with tempfile.TemporaryDirectory(prefix='scoop handoff ') as scratch:
         set_manifest('v0.0.2')
         state=apply('updated');assert state['version']=='v0.0.2',state
         assert 'v0.0.2' in run([str(exe),'--version'],env=env)
+        operation=Path(state['result_path']).parent
+        request=operation/'request.json'
+        before_result=Path(state['result_path']).read_bytes()
+        replay=subprocess.run([str(operation/'helper.exe'),'--internal-scoop-upgrade',str(request),hashlib.sha256(request.read_bytes()).hexdigest(),state['operation_id']],env=env,capture_output=True,text=True,timeout=15)
+        assert replay.returncode!=0 and Path(state['result_path']).read_bytes()==before_result,'helper request was replayable'
+        records.append({'case':'completed-request-replay','status':'refused-without-changing-result'})
         # A suspended fixture executable is a real loaded image owned by this
         # test. No existing user process is discovered or stopped.
         held=subprocess.Popen([str(exe),'--version'],env=env,creationflags=0x4,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         try: apply('blocked')
         finally: held.kill();held.wait(timeout=10)
         apply('up-to-date')
-        set_manifest('v0.0.1',bad_hash=True)
-        # Scoop may refuse a lower version without downloading. Force is never
-        # used; failure/cancellation command boundaries have separate tests.
+        set_manifest('v0.0.2',bad_hash=True,advertised='0.0.3')
+        apply('failed')
+        assert 'v0.0.2' in run([str(exe),'--version'],env=env), 'checksum failure changed the installed version'
         assert hashlib.sha256(old.read_bytes()).hexdigest()==old_hash,'old version payload was unexpectedly overwritten'
         output=repo/'build/windows-scoop-smoke.json';output.parent.mkdir(exist_ok=True)
         output.write_text(json.dumps({'scoop_source':SCOOP_SHA,'project':a.project,'cases':records},indent=2))

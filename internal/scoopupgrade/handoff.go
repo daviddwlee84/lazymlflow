@@ -60,7 +60,10 @@ func (p Plan) Handoff(ctx context.Context, interactive bool) (Report, error) {
 			return result, errors.New("invalid existing upgrade lock; inspect local upgrade state")
 		}
 		if processAlive(active.PID, active.Started) {
-			return result, fmt.Errorf("upgrade %s is already active; use upgrade --status %s", active.ID, active.ID)
+			previous, err := readStatus(root, active.ID)
+			if err != nil || !terminal(previous.Status) {
+				return result, fmt.Errorf("upgrade %s is already active; use its status_command to inspect it", active.ID)
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return result, err
@@ -232,6 +235,19 @@ func HandleHelper(product Product) (int, bool) {
 	if err != nil || len(r.Files) != 5 || f.Hash != r.Files[0].Hash {
 		return 1, true
 	}
+	// Claim the hash-bound request once, before writing any status. Replaying
+	// a completed helper cannot run Scoop twice or overwrite its result.
+	claim, err := os.OpenFile(filepath.Join(dir, "helper.claim"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return 1, true
+	}
+	if _, err := fmt.Fprintln(claim, os.Getpid()); err != nil {
+		claim.Close()
+		return 1, true
+	}
+	if err := claim.Close(); err != nil {
+		return 1, true
+	}
 	return runHelper(r, dir), true
 }
 
@@ -239,7 +255,8 @@ func runHelper(r request, dir string) int {
 	result := Report{Status: "waiting", Manager: "scoop", Package: r.Package, Bucket: r.Bucket, CurrentVersion: r.Version,
 		Path: r.StablePath, Command: r.command(), CanUpgrade: true, OperationID: r.OperationID,
 		ResultPath: filepath.Join(dir, "result.json"), LogPath: filepath.Join(dir, "progress.log"),
-		HelperPID: os.Getpid(), HelperStarted: processStarted(os.Getpid())}
+		HelperPID: os.Getpid(), HelperStarted: processStarted(os.Getpid()),
+		StatusCommand: []string{filepath.Join(dir, "helper.exe"), "upgrade", "--status", r.OperationID, "--json"}}
 	if result.HelperStarted == 0 || r.ParentPID <= 0 || r.ParentStarted == 0 {
 		return 1
 	}
@@ -308,6 +325,7 @@ func runHelper(r request, dir string) int {
 	}
 	args := r.command()
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+	cmd.Dir = dir
 	cmd.Env = replaceEnv(os.Environ(), "SCOOP", r.Root)
 	cmd.Stdout, cmd.Stderr = output, output
 	cmd.WaitDelay = 2 * time.Second
@@ -329,22 +347,16 @@ func runHelper(r request, dir string) int {
 	if err != nil {
 		return finish("failed", "Scoop returned success but its current executable is missing.")
 	}
-	version, err := Inspect(ctx, current, r.Product)
-	if err != nil {
-		return finish("failed", "Scoop returned success but the installed executable could not be verified.")
-	}
-	// Re-prove the current receipt/manager after the junction moved. No new
-	// manager command or GitHub release query occurs during this verification.
+	// One post-manager observation binds the actual product/version, receipt,
+	// manager root and current junction; do not combine separate version reads.
 	after, err := Prepare(ctx, current, r.Product, Options{})
 	if err != nil || !samePath(after.Root, r.Root) || after.Package != r.Package || after.Bucket != r.Bucket {
-		return finish("failed", "Scoop installation ownership changed during update.")
+		return finish("failed", "Scoop returned success but the effective package ownership or executable could not be verified.")
 	}
+	version := after.CurrentVersion
 	result.Version, result.Path = version, after.StablePath
-	fingerprint, err := capture(current)
-	if err != nil {
-		return finish("failed", "Cannot verify the effective installed executable.")
-	}
-	result.Changed = version != r.Version || !samePath(current, r.CurrentPath) || fingerprint.Hash != r.Files[0].Hash
+	result.ChangeKnown = true
+	result.Changed = version != r.Version || !samePath(after.CurrentPath, r.CurrentPath) || after.request.Files[0].Hash != r.Files[0].Hash
 	if result.Changed {
 		return finish("updated", "Verified installed version: "+version)
 	}

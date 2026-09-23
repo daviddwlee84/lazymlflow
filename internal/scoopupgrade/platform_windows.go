@@ -203,6 +203,7 @@ func canonicalPath(path string) (string, error) {
 func startHelper(path string, args []string, interactive bool) (*exec.Cmd, bool, error) {
 	cmd := exec.Command(path, args...)
 	configureHelper(cmd, interactive)
+	cmd.Dir = filepath.Dir(path)
 	err := cmd.Start()
 	if err == nil {
 		return cmd, false, nil
@@ -212,6 +213,7 @@ func startHelper(path string, args []string, interactive bool) (*exec.Cmd, bool,
 	}
 	cmd = exec.Command(path, args...)
 	configureHelper(cmd, interactive)
+	cmd.Dir = filepath.Dir(path)
 	cmd.SysProcAttr.CreationFlags &^= windows.CREATE_BREAKAWAY_FROM_JOB
 	if err := cmd.Start(); err != nil {
 		return nil, false, err
