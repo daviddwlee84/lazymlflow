@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/daviddwlee84/lazymlflow/internal/fileuri"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -128,7 +129,7 @@ func (s *Store) open(ctx context.Context, create bool) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+	u := url.URL{Scheme: "file", Path: fileuri.Path(abs)}
 	q := u.Query()
 	q.Add("_pragma", "busy_timeout(50)")
 	q.Set("_txlock", "immediate")

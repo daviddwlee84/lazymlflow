@@ -102,10 +102,9 @@ func (p Plan) Handoff(ctx context.Context, interactive bool) (Report, error) {
 	if err := writeJSON(result.ResultPath, result); err != nil {
 		return result, err
 	}
-	cmd := exec.Command(helper, helperArgument, requestPath, hexHash(data), id)
-	configureHelper(cmd, interactive)
-	if err := cmd.Start(); err != nil {
-		return result, fmt.Errorf("start independent update helper: %w", err)
+	cmd, jobBound, err := startHelper(helper, []string{helperArgument, requestPath, hexHash(data), id}, interactive)
+	if err != nil {
+		return result, fmt.Errorf("start update helper: %w", err)
 	}
 	result.HelperPID, result.HelperStarted = cmd.Process.Pid, processStarted(cmd.Process.Pid)
 	failed := true
@@ -142,6 +141,9 @@ func (p Plan) Handoff(ctx context.Context, interactive bool) (Report, error) {
 			}
 			failed = false
 			ready.Status = "handed-off"
+			if jobBound {
+				ready.Reason = "The host retains process lifetime control. Keep the launching terminal open until upgrade --status reports a final result."
+			}
 			return ready, nil
 		}
 		if err == nil && terminal(ready.Status) {

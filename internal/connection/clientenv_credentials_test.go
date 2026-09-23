@@ -71,6 +71,7 @@ func TestClientCredentialFileSSHRequiresResolvedProxyTokenForException(t *testin
 	// Never inspect the developer's SDK file in this regression.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	directory := filepath.Join(home, ".mlflow")
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		t.Fatal(err)

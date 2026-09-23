@@ -72,6 +72,7 @@ with tempfile.TemporaryDirectory(prefix='scoop handoff ') as scratch:
         run(scoop_cmd+['install','fixture/'+package],env=env)
         exe=scoop/'apps'/package/'current'/(a.binary+'.exe')
         old=exe.resolve();old_hash=hashlib.sha256(old.read_bytes()).hexdigest()
+        print(json.dumps({'fixture_executable':str(exe),'resolved':str(old),'version':run([str(exe),'--version'],env=env),'powershell':pwsh,'receipt':json.loads((old.parent/'install.json').read_text(encoding='utf-8-sig'))}),flush=True)
         check=decode(run([str(exe),'upgrade','--check','--json'],env=env))
         assert check['package']==package and check['bucket']=='fixture' and check['can_upgrade'],check
         assert not (home/'state'/a.binary/'upgrades').exists(),'check wrote operation state'

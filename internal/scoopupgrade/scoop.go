@@ -106,7 +106,7 @@ func canonical(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.EvalSymlinks(p)
+	return canonicalPath(p)
 }
 
 func samePath(a, b string) bool {
@@ -196,7 +196,7 @@ func Prepare(ctx context.Context, executable string, product Product, opts Optio
 	}
 	resolved, err := canonical(executable)
 	if err != nil {
-		return plan, err
+		return plan, fmt.Errorf("resolve running Scoop executable: %w", err)
 	}
 	versionDir := filepath.Dir(resolved)
 	if !strings.EqualFold(filepath.Base(resolved), product.Binary+".exe") {
@@ -250,7 +250,7 @@ func Prepare(ctx context.Context, executable string, product Product, opts Optio
 	}
 	pwsh, err = canonical(pwsh)
 	if err != nil {
-		return plan, err
+		return plan, fmt.Errorf("resolve selected PowerShell: %w", err)
 	}
 	if opts.Inspect == nil {
 		opts.Inspect = func(c context.Context, p string) (string, error) { return Inspect(c, p, product) }
@@ -278,7 +278,7 @@ func Prepare(ctx context.Context, executable string, product Product, opts Optio
 	if opts.StateRoot == "" {
 		opts.StateRoot, err = stateRoot(product.Binary)
 		if err != nil {
-			return plan, err
+			return plan, fmt.Errorf("resolve upgrade state directory: %w", err)
 		}
 	}
 	r := &request{Product: product, Root: root, Package: name, Bucket: receipt.Bucket, CurrentPath: resolved, StablePath: stable, Manager: manager, PowerShell: pwsh, Version: version, Files: files}

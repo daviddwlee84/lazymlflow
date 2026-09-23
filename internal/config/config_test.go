@@ -1,8 +1,11 @@
 package config
 
 import (
+	"github.com/daviddwlee84/lazymlflow/internal/fileuri"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,8 +15,13 @@ import (
 func TestDefaultPathAndMissingConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", "relative")
 	want := filepath.Join(home, ".config", "lazymlflow", "config.toml")
+	if runtime.GOOS == "windows" {
+		t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
+		want = filepath.Join(home, "AppData", "Roaming", "lazymlflow", "config.toml")
+	}
 	if DefaultPath() != want {
 		t.Fatalf("default path %s", DefaultPath())
 	}
@@ -69,7 +77,7 @@ func TestResolvePrecedence(t *testing.T) {
 
 func TestNormalizeTarget(t *testing.T) {
 	base := t.TempDir()
-	for _, test := range []struct{ uri, want string }{{"mlruns", "file://" + filepath.Join(base, "mlruns")}, {"file:mlruns", "file://" + filepath.Join(base, "mlruns")}, {"sqlite:///mlflow.db", "sqlite:///" + filepath.Join(base, "mlflow.db")}, {"https://host.test/prefix/", "https://host.test/prefix"}} {
+	for _, test := range []struct{ uri, want string }{{"mlruns", (&url.URL{Scheme: "file", Path: fileuri.Path(filepath.Join(base, "mlruns"))}).String()}, {"file:mlruns", (&url.URL{Scheme: "file", Path: fileuri.Path(filepath.Join(base, "mlruns"))}).String()}, {"sqlite:///mlflow.db", "sqlite:///" + filepath.ToSlash(filepath.Join(base, "mlflow.db"))}, {"https://host.test/prefix/", "https://host.test/prefix"}} {
 		target, err := NormalizeTarget(core.Target{ID: "main", TrackingURI: test.uri}, base)
 		if err != nil {
 			t.Fatal(err)

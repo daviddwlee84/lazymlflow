@@ -221,6 +221,7 @@ func TestPathErrorAndClosedStore(t *testing.T) {
 func TestDefaultPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_DATA_HOME", "relative")
 	if got := DefaultPath(); got != filepath.Join(home, ".local/share/lazymlflow/state.db") {
 		t.Fatal(got)

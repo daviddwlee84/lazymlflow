@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/daviddwlee84/lazymlflow/internal/fileuri"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -184,7 +185,7 @@ func NormalizeTarget(t core.Target, baseDir string) (core.Target, error) {
 		if e != nil {
 			return t, e
 		}
-		t.TrackingURI = (&url.URL{Scheme: "file", Path: filepath.ToSlash(p)}).String()
+		t.TrackingURI = (&url.URL{Scheme: "file", Path: fileuri.Path(p)}).String()
 		if t.WorkingDir == "" {
 			t.WorkingDir = baseDir
 		}
@@ -195,7 +196,7 @@ func NormalizeTarget(t core.Target, baseDir string) (core.Target, error) {
 		if e != nil {
 			return t, e
 		}
-		t.TrackingURI = (&url.URL{Scheme: "file", Path: filepath.ToSlash(p)}).String()
+		t.TrackingURI = (&url.URL{Scheme: "file", Path: fileuri.Path(p)}).String()
 		if t.WorkingDir == "" {
 			t.WorkingDir = baseDir
 		}
@@ -233,7 +234,7 @@ func NormalizeTarget(t core.Target, baseDir string) (core.Target, error) {
 			if e != nil {
 				return t, e
 			}
-			t.ArtifactsDestination = (&url.URL{Scheme: "file", Path: filepath.ToSlash(p)}).String()
+			t.ArtifactsDestination = (&url.URL{Scheme: "file", Path: fileuri.Path(p)}).String()
 		} else if !strings.Contains(t.ArtifactsDestination, "://") {
 			t.ArtifactsDestination, err = absolutePath(t.ArtifactsDestination, baseDir)
 			if err != nil {
@@ -303,7 +304,7 @@ func FilePath(uri, base string) (string, error) {
 	if p == "" {
 		return "", errors.New("file URI is missing its directory")
 	}
-	return absolutePath(filepath.FromSlash(p), base)
+	return absolutePath(fileuri.Native(p), base)
 }
 
 // SQLitePath accepts SQLAlchemy's relative (three slashes) and absolute (four
@@ -317,7 +318,7 @@ func SQLitePath(uri, base string) (string, error) {
 	if p == "" || p == ":memory:" || strings.ContainsAny(p, "?#") {
 		return "", errors.New("SQLite URI must name an existing database file without query options")
 	}
-	return absolutePath(filepath.FromSlash(p), base)
+	return absolutePath(fileuri.Native(p), base)
 }
 
 // Resolve follows flags, app target env, MLflow URI env, configured default,

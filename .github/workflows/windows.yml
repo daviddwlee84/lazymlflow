@@ -25,10 +25,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: go vet ./...
-      - run: go test -race ./...
+      - run: go test -race ./internal/scoopupgrade
       - name: Real Scoop ownership and process-exit handoff
         run: python scripts/windows_scoop_smoke.py --project lazymlflow --binary lazymlflow --main ./cmd/lazymlflow
+      - run: go vet ./...
+      - run: go test -race -timeout 12m ./...
       - uses: actions/upload-artifact@v4
         if: always()
         with:

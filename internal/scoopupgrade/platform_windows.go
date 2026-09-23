@@ -5,6 +5,7 @@ package scoopupgrade
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -167,4 +168,53 @@ func consolePause(ctx context.Context) {
 	case <-ctx.Done():
 	case <-done:
 	}
+}
+
+// Query the opened target instead of text-walking Scoop's directory junction.
+// This also normalizes short names and extended Windows path prefixes.
+func canonicalPath(path string) (string, error) {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return "", err
+	}
+	h, err := windows.CreateFile(name, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		return "", err
+	}
+	defer windows.CloseHandle(h)
+	buffer := make([]uint16, 32768)
+	n, err := windows.GetFinalPathNameByHandle(h, &buffer[0], uint32(len(buffer)), 0)
+	if err != nil {
+		return "", err
+	}
+	if n >= uint32(len(buffer)) {
+		return "", fmt.Errorf("resolved path exceeds Windows path limit")
+	}
+	value := windows.UTF16ToString(buffer[:n])
+	if strings.HasPrefix(value, `\\?\UNC\`) {
+		return `\\` + strings.TrimPrefix(value, `\\?\UNC\`), nil
+	}
+	return strings.TrimPrefix(value, `\\?\`), nil
+}
+
+// Some hosts (including CI job objects) deny breakaway. A separate console and
+// process group can still outlive the initiating app while the host job lives.
+// The caller reports this limitation; an interrupted helper is never success.
+func startHelper(path string, args []string, interactive bool) (*exec.Cmd, bool, error) {
+	cmd := exec.Command(path, args...)
+	configureHelper(cmd, interactive)
+	err := cmd.Start()
+	if err == nil {
+		return cmd, false, nil
+	}
+	if !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
+		return nil, false, err
+	}
+	cmd = exec.Command(path, args...)
+	configureHelper(cmd, interactive)
+	cmd.SysProcAttr.CreationFlags &^= windows.CREATE_BREAKAWAY_FROM_JOB
+	if err := cmd.Start(); err != nil {
+		return nil, false, err
+	}
+	return cmd, true, nil
 }

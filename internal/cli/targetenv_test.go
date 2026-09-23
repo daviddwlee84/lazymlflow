@@ -21,6 +21,7 @@ func targetEnvTestOptions(t *testing.T) (Options, *fakeConnector, *bytes.Buffer,
 	t.Helper()
 	// The SDK credential-file guard must never read the developer's credentials.
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	return testOptions(t)
 }
 

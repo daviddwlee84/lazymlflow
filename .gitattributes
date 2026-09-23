@@ -9,3 +9,8 @@
 /.cursor/plans/** export-ignore
 /.opencode/plans export-ignore
 /.opencode/plans/** export-ignore
+
+# Embedded scripts, skills and checksum fixtures must retain Git's LF bytes on Windows.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
