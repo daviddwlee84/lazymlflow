@@ -169,11 +169,11 @@ def main():
             assert any(path.endswith("runs/search") and set(q["experiment_ids"]) == {"1", "2"}
                        and q.get("filter") == "attributes.status = 'RUNNING'" for path, q in fixture.events), "Running did not span experiments"
 
-            # The four pinned scopes precede the real experiment rows. Keyboard
+            # The five virtual scopes precede the real experiment rows. Keyboard
             # navigation deliberately avoids assumptions about terminal width.
-            for index in range(4):
+            for index in range(5):
                 terminal.send("1gg" + "j" * index + "\r")
-            terminal.send("1ggjjjj\r2gg3]")
+            terminal.send("1ggjjjjj\r2gg3]")
             terminal.wait(lambda: (fixture.ids["complete"], "train_loss") in fixture.histories(), "metric table on completed run")
             terminal.send("*")
             terminal.wait(lambda: views().get("1", {}).get("metric_pins") == ["train_loss"], "first pin saved")
@@ -244,7 +244,7 @@ def main():
             terminal = Terminal([binary, "--config", str(config)], env, root)
             terminal.wait(lambda: any(path.endswith("runs/search") and q["experiment_ids"] == ["1"]
                                      for path, q in fixture.events[mark:]), "restart real experiment loaded")
-            terminal.send("1ggjjjj\r2gg3]")
+            terminal.send("1ggjjjjj\r2gg3]")
             terminal.wait(lambda: (fixture.ids["complete"], "train_loss") in fixture.histories(mark), "saved first pin restored")
             assert (fixture.ids["complete"], "valid_corr") not in fixture.histories(mark), "overlay persisted across restart"
             assert views()["1"]["metric_pins"] == ["train_loss", "valid_corr"]

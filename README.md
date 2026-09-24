@@ -295,6 +295,8 @@ local visibility choices persist across launches.
 | `A` / Ctrl+X | Load all matching pages / cancel background collection |
 | `r` | Refresh; previous rows survive a failed refresh |
 | Space / `c` | Select runs / open comparison |
+| `*` / `i` in Runs | Pin/unpin a run / show full run name and information |
+| `i` in Experiments | Show full experiment name and information |
 | `x` | Compare only differences |
 | `m` | Choose a metric and load history |
 | `v` | Searchable column checkboxes, or toggle comparison table/chart |
@@ -337,6 +339,35 @@ the experiment list's search and pagination. Running sorts by start time; Recent
 includes finished, failed and killed runs sorted by end time. Recent starts with
 100 rows; `n` loads more and `A` loads all once. Subsequent background polls stay
 bounded to current activity rather than repeating that historical query.
+
+**Pinned** collects your bookmarked runs across all experiments on the current
+tracking source. In Runs, `*` toggles a bookmark and a `★` marks pinned names.
+Bookmarks persist across restarts and stay separate from Space-selected comparison
+runs and metric pins. They do not depend on the Recent window or Activity cache;
+local visibility filters still apply. The default order is most recently pinned
+first, with `/` search and `s` sorting available.
+
+Pinned opens immediately from saved metadata and loads the selected run's details.
+Press `r` in its list to reload bookmarks and refresh their status; unavailable
+runs keep their cached row with a retry hint, and remotely deleted runs remain
+labelled until you unpin them. Each Pinned view has its own session overlay profile,
+so matching metrics work across its experiments too. Pins are personal local state;
+MLflow runs and tags are unchanged.
+
+`i` on an experiment or run shows its full name in a wrapping, scrollable popup.
+Use arrows/`j/k`, PgUp/PgDn, Home/End to read long names and `Y` to copy the exact
+name. Closing the popup returns to the same selection.
+
+```sh
+lazymlflow runs pin RUN_ID
+lazymlflow runs pinned --json
+lazymlflow runs unpin RUN_ID
+```
+
+`runs pinned` lists cached metadata and `runs unpin` works without connecting.
+Select another target with the usual `--target` option. Pins are saved per
+configured target and tracking location. `I` still returns to the last Activity
+inbox view; the Pinned sidebar entry opens bookmarks.
 
 When the selected Running run finishes, its row stays visible with the real
 terminal status and a "kept while reading" note. The Running count immediately
@@ -766,6 +797,7 @@ go build -o bin/lazymlflow ./cmd/lazymlflow
 python3 scripts/pty_smoke.py --binary ./bin/lazymlflow
 python3 scripts/pty_inspection.py --binary ./bin/lazymlflow
 python3 scripts/pty_activity.py --binary ./bin/lazymlflow
+python3 scripts/pty_pins.py --binary ./bin/lazymlflow
 python3 scripts/pty_retention.py --binary ./bin/lazymlflow
 python3 scripts/pty_charts.py --binary ./bin/lazymlflow
 python3 scripts/pty_preview.py --binary ./bin/lazymlflow

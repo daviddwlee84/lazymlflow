@@ -23,9 +23,17 @@ const (
 	scopeRecent     runListScope = "recent"
 	scopeUnread     runListScope = "unread"
 	scopeAlerts     runListScope = "alerts"
+	scopePinned     runListScope = "pinned"
 )
 
-var activityScopes = []runListScope{scopeRunning, scopeRecent, scopeUnread, scopeAlerts}
+var activityScopes = []runListScope{scopeRunning, scopeRecent, scopeUnread, scopeAlerts, scopePinned}
+
+func (m *model) sidebarActivityScopes() []runListScope {
+	if m.runPinStore() == nil {
+		return activityScopes[:len(activityScopes)-1]
+	}
+	return activityScopes
+}
 
 type activityState struct {
 	Scope, LastScope                                     runListScope
@@ -49,6 +57,7 @@ type activityState struct {
 	SuppressRetention                                    bool
 	ManualRefreshGen                                     uint64
 	ManualRefreshScope                                   runListScope
+	Pins                                                 *runPinState
 }
 
 func (m *model) activityStore() core.ActivityStore {
@@ -97,6 +106,8 @@ func activityLabel(scope runListScope) string {
 		return "Unread"
 	case scopeAlerts:
 		return "Alerts"
+	case scopePinned:
+		return "Pinned"
 	}
 	return "Runs"
 }
@@ -105,7 +116,7 @@ func (m *model) activityActions() []action {
 		return nil
 	}
 	a := []action{act("activity", "I", "Activity inbox"), act("next-unread", "J", "Next unread run"), act("prev-unread", "K", "Previous unread run"), act("activity-settings", "!", "Activity / alert preferences"), act("read-all", "W", "Mark all target inbox read"), act("activity-full", "", "Rebuild all experiment counts / alerts"), act("activity-pause", "", "Pause / resume activity refresh")}
-	if state := m.activityCurrent(); state != nil && (state.Pending || state.FullPending) && !m.downloadPending {
+	if state := m.activityCurrent(); state != nil && (state.Pending || state.FullPending || state.Pins != nil && (state.Pins.Loading || state.Pins.Refreshing)) && !m.downloadPending {
 		a = append(a, act("activity-cancel", "ctrl+x", "Cancel activity scan"))
 	}
 	if m.run() != nil {
@@ -182,7 +193,7 @@ func (m *model) performActivity(id string) (tea.Cmd, bool) {
 			return m.refreshActivityLimit(false, nil, -1), true
 		}
 	case "cancel-all", "activity-cancel":
-		if a := m.activityCurrent(); a != nil && (a.Pending || a.FullPending) {
+		if a := m.activityCurrent(); a != nil && (a.Pending || a.FullPending || a.Pins != nil && (a.Pins.Loading || a.Pins.Refreshing)) {
 			m.stopActivity()
 			m.status = "Activity scan cancelled; cached rows retained"
 			return nil, true
@@ -196,6 +207,10 @@ func (m *model) performActivity(id string) (tea.Cmd, bool) {
 	return nil, false
 }
 func (m *model) openActivity(scope runListScope, focus bool) tea.Cmd {
+	if scope == scopePinned && m.runPinStore() == nil {
+		m.status = "Local run pin storage is unavailable"
+		return nil
+	}
 	a := m.activityState()
 	if a == nil {
 		return nil
@@ -211,7 +226,11 @@ func (m *model) openActivity(scope runListScope, focus bool) tea.Cmd {
 		m.releaseActivityRetention()
 		a.ManualRefreshGen = 0
 	}
-	a.Scope, a.LastScope = scope, scope
+	a.Scope = scope
+	// Bookmarks have their own entry; I still returns to the last inbox view.
+	if scope != scopePinned {
+		a.LastScope = scope
+	}
 	m.compare = false
 	m.chart = false
 	m.mousePressed = ""
@@ -219,6 +238,9 @@ func (m *model) openActivity(scope runListScope, focus bool) tea.Cmd {
 		m.focus = 1
 	}
 	m.rebuildActivityViews()
+	if scope == scopePinned {
+		return tea.Batch(m.loadRunPins(false, false), m.ensureDetails())
+	}
 	if !a.Loaded {
 		return m.loadActivity()
 	}
@@ -237,22 +259,23 @@ func (m *model) moveActivitySidebar(delta int) tea.Cmd {
 	if a == nil || s == nil {
 		return nil
 	}
-	index := len(activityScopes) + s.Index
+	scopes := m.sidebarActivityScopes()
+	index := len(scopes) + s.Index
 	if a.Scope != scopeExperiment {
-		for i, scope := range activityScopes {
+		for i, scope := range scopes {
 			if scope == a.Scope {
 				index = i
 			}
 		}
 	}
-	index = clamp(index+delta, 0, len(activityScopes)+len(m.experimentsVisible())-1)
-	if index < len(activityScopes) {
-		return m.openActivity(activityScopes[index], false)
+	index = clamp(index+delta, 0, len(scopes)+len(m.experimentsVisible())-1)
+	if index < len(scopes) {
+		return m.openActivity(scopes[index], false)
 	}
 	before := s.Selected
 	wasActivity := a.Scope != scopeExperiment
 	m.leaveActivity()
-	m.selectExperiment(index - len(activityScopes))
+	m.selectExperiment(index - len(scopes))
 	if wasActivity || before != s.Selected {
 		return tea.Batch(m.loadRuns(false), m.loadView())
 	}
@@ -401,7 +424,7 @@ func waitActivityEvent(ctx context.Context, events <-chan activityScanMsg) tea.C
 	}
 }
 func (m *model) stopActivity() {
-	for _, name := range []string{"activity:fast", "activity:full", "activity:run"} {
+	for _, name := range []string{"activity:fast", "activity:full", "activity:run", "pins:load", "pins:refresh"} {
 		if c := m.cancel[name]; c != nil {
 			c()
 			delete(m.cancel, name)
@@ -417,6 +440,10 @@ func (m *model) stopActivity() {
 		a.FullPending = false
 		a.Loading = false
 		a.RunPending = ""
+		if a.Pins != nil {
+			a.Pins.Loading, a.Pins.Refreshing = false, false
+			a.Pins.Gen, a.Pins.RefreshGen = m.seq, m.seq
+		}
 	}
 }
 func (m *model) updateActivity(msg tea.Msg) (tea.Cmd, bool) {
@@ -506,12 +533,21 @@ func (m *model) updateActivity(msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		a.RunPending = ""
+		if a.Pins != nil && a.Pins.FetchedAt[v.id] > v.startedAt && v.startedAt > 0 {
+			return m.ensureDetails(), true
+		}
 		if v.err != nil {
+			if a.Pins != nil && m.runPinned(v.id) {
+				a.Pins.RunErrors[v.id] = v.err.Error()
+			}
 			m.status = "Run details unavailable: " + v.err.Error()
 			return nil, true
 		}
 		if v.run.ID() != v.id {
 			m.status = "Run details returned an unexpected run ID"
+			if a.Pins != nil && m.runPinned(v.id) {
+				a.Pins.RunErrors[v.id] = m.status
+			}
 			return nil, true
 		}
 		readAt := v.startedAt
@@ -524,6 +560,10 @@ func (m *model) updateActivity(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		a.Runs[v.id] = &v.run
 		a.MetadataAt[v.id] = readAt
+		if a.Pins != nil {
+			delete(a.Pins.RunErrors, v.id)
+			a.Pins.FetchedAt[v.id] = v.startedAt
+		}
 		m.rebuildActivityViews()
 		if r := m.runs(); r != nil && r.Selected == v.id && a.Scope != scopeExperiment {
 			a.Inspect = &v.run
@@ -679,7 +719,12 @@ func (m *model) activityRecords(scope runListScope) []core.ActivityRecord {
 	if scope == scopeAlerts && a.AlertMode != "active" {
 		view = a.AlertMode
 	}
-	rows := core.ActivityRecords(a.Snapshot, view)
+	var rows []core.ActivityRecord
+	if scope == scopePinned {
+		rows = m.pinnedRecords()
+	} else {
+		rows = core.ActivityRecords(a.Snapshot, view)
+	}
 	var out []core.ActivityRecord
 	visibility := "normal"
 	if r := a.Views[scope]; r != nil {
@@ -757,7 +802,7 @@ func (m *model) rebuildActivityViews() {
 				break
 			}
 		}
-		if !found && scope != scopeRunning && a.Scope == scope && a.Inspect != nil && a.Inspect.ID() == selected && m.focus == 2 {
+		if !found && scope != scopeRunning && scope != scopePinned && a.Scope == scope && a.Inspect != nil && a.Inspect.ID() == selected && m.focus == 2 {
 			continue
 		}
 		r.Index = clamp(index, 0, len(presented)-1)
@@ -837,6 +882,14 @@ func (m *model) loadActivityRun(force bool) tea.Cmd {
 		return nil
 	}
 	id := r.Selected
+	if a.Scope == scopePinned && a.Pins != nil {
+		if !force && (a.Pins.Refreshing || a.Pins.RunErrors[id] != "") {
+			return nil
+		}
+		if force {
+			delete(a.Pins.RunErrors, id)
+		}
+	}
 	if !force && a.Runs[id] != nil || a.RunPending == id {
 		return nil
 	}
@@ -917,6 +970,10 @@ func (m *model) rememberActivityMetadata(runs []core.Run) {
 		copy := run
 		a.Runs[run.ID()] = &copy
 		a.MetadataAt[run.ID()] = at
+		if a.Pins != nil {
+			delete(a.Pins.RunErrors, run.ID())
+			a.Pins.FetchedAt[run.ID()] = at
+		}
 		if a.Inspect != nil && a.Inspect.ID() == run.ID() {
 			a.Inspect = &copy
 		}
@@ -1017,7 +1074,7 @@ func (m *model) activitySidebar(p *paneContent, w int) {
 	if !m.activityAvailable() {
 		return
 	}
-	for _, scope := range activityScopes {
+	for _, scope := range m.sidebarActivityScopes() {
 		count := 0
 		if a := m.activityCurrent(); a != nil {
 			count = a.ScopeCounts[scope]
@@ -1039,6 +1096,14 @@ func (m *model) activitySidebar(p *paneContent, w int) {
 			}
 			if a.Err != "" {
 				suffix += " stale"
+			}
+		}
+		if scope == scopePinned {
+			suffix = ""
+			if pins := m.currentRunPins(); pins == nil || !pins.Loaded {
+				suffix = " …"
+			} else if pins.Err != "" {
+				suffix = " stale"
 			}
 		}
 		p.addHit(row(fmt.Sprintf("%s %d%s", activityLabel(scope), count, suffix), m.activityScope() == scope, w), "activity:"+string(scope), w)
@@ -1140,6 +1205,13 @@ func (m *model) activityExperimentName(id string) string {
 		for _, e := range s.Experiments {
 			if e.ID == id {
 				return e.Name
+			}
+		}
+	}
+	if pins := m.currentRunPins(); pins != nil {
+		for _, pin := range pins.Items {
+			if pin.ExperimentID == id && pin.ExperimentName != "" {
+				return pin.ExperimentName
 			}
 		}
 	}

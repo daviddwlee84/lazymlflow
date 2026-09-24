@@ -194,7 +194,10 @@ func (m *model) View() tea.View {
 }
 func (m *model) contextLine() string {
 	if m.overlay == "" && m.activityScope() != scopeExperiment {
-		return "● unread · ! active alert · Enter inspect/read · J/K unread · w read · W read all · ! preferences"
+		if m.focus == 1 {
+			return "★ pinned · ● unread · ! alert · i full name · * pin run · J/K unread · w/W read"
+		}
+		return "★ pinned · ● unread · ! alert · Enter inspect/read · J/K unread · w/W read"
 	}
 	if m.overlay != "" {
 		switch m.overlay {
@@ -229,6 +232,12 @@ func (m *model) contextLine() string {
 }
 func (m *model) footer() string {
 	if m.overlay == "" && m.activityScope() != scopeExperiment && m.focus < 2 {
+		if m.activityScope() == scopePinned {
+			if m.focus == 0 {
+				return "Enter / 2 focus pinned runs · r refresh pins · I inbox · ? help"
+			}
+			return "* pin/unpin · i full name · Enter inspect · / search · s sort · r refresh pins · ? help"
+		}
 		return "I activity · J/K unread · Enter inspect/read · w/W read · a acknowledge · r refresh · ! settings · ? help"
 	}
 	if v := m.inspectionFooter(); v != "" {
@@ -248,7 +257,9 @@ func (m *model) footer() string {
 			case "sort":
 				return "Enter primary sort · Space secondary / direction · Backspace remove · n numeric · 0 reset · Esc close"
 			case "info":
-				return "↑↓/jk scroll · r rebuild counts · Enter / Esc close"
+				return "↑↓/jk scroll · PgUp/PgDn · Y copy full name · r rebuild counts · Enter / Esc close"
+			case "run-info":
+				return "↑↓/jk scroll · PgUp/PgDn · Y copy full name · Enter / Esc close"
 			case "parent-info":
 				return "↑↓/jk scroll · Enter / Esc close"
 			default:
@@ -272,7 +283,7 @@ func (m *model) footer() string {
 			return "↑↓/jk scroll · Enter choose · Esc back"
 		}
 	}
-	priorities := []string{"targets", "local", "filter", "sort", "basket", "compare", "columns", "history", "chart", "axis", "diff", "download", "open", "copy", "refresh", "journal", "summary", "dataset-workspace"}
+	priorities := []string{"info", "run-info", "toggle-run-pin", "targets", "local", "filter", "sort", "basket", "compare", "columns", "history", "chart", "axis", "diff", "download", "open", "copy", "refresh", "journal", "summary", "dataset-workspace"}
 	available := m.actions()
 	var out []string
 	for _, id := range priorities {

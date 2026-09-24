@@ -202,11 +202,11 @@ def main():
             terminal.wait(lambda: "one-run-0" in terminal.text(), "initial experiments and runs")
             terminal.wait(lambda: b"\x1b[?1002h" in terminal.raw, "mouse reporting enabled")
             # Click experiment rows through the actual terminal parser. The
-            # wide layout starts with four fixed Activity shortcuts, a divider,
+            # wide layout starts with five fixed virtual shortcuts, a divider,
             # and the experiment status line below the pane border.
-            terminal.click(8, 9)
+            terminal.click(8, 10)
             terminal.wait(lambda: any(p.endswith("runs/search") and q["experiment_ids"] == ["2"] for p, q in fixtures[0].events), "mouse selects experiment")
-            terminal.click(8, 8)
+            terminal.click(8, 9)
             terminal.send("j")
             terminal.wait(lambda: any(p.endswith("runs/search") and q["experiment_ids"] == ["2"] for p, q in fixtures[0].events), "Vim experiment navigation")
             terminal.send("\x1b[A")

@@ -191,7 +191,7 @@ func newTargetState() *targetState {
 	return &targetState{Visibility: map[string]core.Visibility{}, VisibilityTouched: map[string]bool{}, Runs: map[string]*runState{}, Artifacts: map[string]*artifactState{}, Basket: map[string]core.Run{}, Histories: map[string][]core.Metric{}, HistoryErrors: map[string]string{}}
 }
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.connect(), m.tick(), m.inspectionTick(), m.loadLayout(), m.loadVisibility(), m.activityTick())
+	return tea.Batch(m.connect(), m.tick(), m.inspectionTick(), m.loadLayout(), m.loadVisibility(), m.activityTick(), m.loadRunPins(false, false))
 }
 func (m *model) tick() tea.Cmd {
 	if m.opts.RefreshSeconds <= 0 {
@@ -316,6 +316,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	defer m.refreshRowCache()
 	defer m.syncInspection()
 	if cmd, handled := m.updateArtifactPreview(msg); handled {
+		return m, cmd
+	}
+	if cmd, handled := m.updateRunPins(msg); handled {
 		return m, cmd
 	}
 	if cmd, handled := m.updateActivity(msg); handled {
@@ -504,6 +507,7 @@ type action struct {
 func act(id, keys, label string) action { return action{id, strings.Split(keys, "|"), label} }
 func (m *model) actions() []action {
 	a := append(m.artifactPreviewActions(), m.activityActions()...)
+	a = append(a, m.runPinActions()...)
 	a = append(a, m.workspaceActions()...)
 	a = append(a, m.inspectionActions()...)
 	a = append(a, act("server-setup", "ctrl+n", "Set up a persistent MLflow server"), act("model-registry", "O", "Browse registered models"), act("target-environment", "E", "Experiment environment"))
@@ -524,6 +528,9 @@ func (m *model) actions() []action {
 	}
 	if m.focus == 1 {
 		a = append(a, act("basket", "space", "Select run for comparison"), act("columns", "v", "Choose columns"), act("previous-column", "[", "Previous metric / parameter column"), act("next-column", "]", "Next metric / parameter column"))
+		if !m.compare && m.run() != nil {
+			a = append(a, act("run-info", "i", "Full run information / name"))
+		}
 	}
 	if m.focus == 1 {
 		if m.activityScope() == scopeExperiment {
@@ -562,6 +569,15 @@ func (m *model) actions() []action {
 }
 
 func (m *model) perform(id string) tea.Cmd {
+	if id == "open-pinned" {
+		return m.openActivity(scopePinned, true)
+	}
+	if id == "toggle-run-pin" {
+		return m.toggleRunPin()
+	}
+	if id == "run-info" {
+		return m.openPicker("run-info")
+	}
 	if id == "artifact-preview" {
 		return m.openArtifactPreview(false)
 	}

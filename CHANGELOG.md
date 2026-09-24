@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add persistent cross-experiment run bookmarks in a Pinned sidebar view, `*` pin/unpin in Runs, and offline CLI listing/removal.
+- Show complete run and experiment names with `i`, wrapped scrolling, and `Y` to copy the full name.
 - Add `/` live filtering to contextual help, including shortcut keys and descriptions, with Enter to keep the filter and Esc to clear it before closing.
 
 ## 0.3.1 — 2026-09-25

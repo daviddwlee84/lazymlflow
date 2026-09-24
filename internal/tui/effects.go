@@ -120,9 +120,12 @@ func (m *model) acceptConnected(v connectedMsg) tea.Cmd {
 	s.Session = v.session
 	s.Retiring = nil
 	s.ConnectErr = ""
-	return tea.Batch(m.loadExperiments(false), m.loadVisibility(), m.loadActivity())
+	return tea.Batch(m.loadExperiments(false), m.loadVisibility(), m.loadActivity(), m.loadRunPins(false, false))
 }
 func (m *model) refresh() tea.Cmd {
+	if m.activityScope() == scopePinned && m.focus < 2 {
+		return m.loadRunPins(true, true)
+	}
 	if m.activityScope() != scopeExperiment && m.focus < 2 {
 		return m.refreshActivityManually()
 	}

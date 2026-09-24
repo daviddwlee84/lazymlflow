@@ -266,7 +266,7 @@ func (a *app) runsCommand() *cobra.Command {
 		})
 	}}
 	compare.Flags().BoolVar(&differences, "differences", false, "Show only fields whose values differ")
-	group.AddCommand(list, get, compare, a.runsSummaryCommand())
+	group.AddCommand(list, get, compare, a.runsSummaryCommand(), a.runsPinnedCommand(), a.runPinCommand(), a.runUnpinCommand())
 	return group
 }
 

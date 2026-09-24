@@ -69,6 +69,13 @@ func (m *model) activityPresentationRows(r *runState) []core.RunRow {
 		if m.activityScope() == scopeRunning && m.activityCurrent() != nil && m.activityCurrent().RetainedRun == run.ID() {
 			note = "ended · kept while reading"
 		}
+		if m.activityScope() == scopePinned {
+			if pins := m.currentRunPins(); pins != nil && pins.RunErrors[run.ID()] != "" {
+				note = "unavailable · cached"
+			} else if run.Info.LifecycleStage == "deleted" {
+				note = "deleted remotely"
+			}
+		}
 		out = append(out, core.RunRow{ID: run.ID(), Kind: "run", Run: run, Label: run.Name(), Note: note})
 	}
 	return out
@@ -162,7 +169,8 @@ func (m *model) experimentContent(w, h int) paneContent {
 		return p
 	}
 	if s.ConnectPending && len(s.Experiments) == 0 {
-		p.Lines = []string{"Connecting in background…", "Navigation remains available.", "Esc cancels; t switches target."}
+		m.activitySidebar(&p, w)
+		p.Lines = append(p.Lines, "Connecting in background…", "Navigation remains available.", "Esc cancels; t switches target.")
 		return p
 	}
 	m.activitySidebar(&p, w)
@@ -235,7 +243,21 @@ func (m *model) runContent(w, h int) paneContent {
 		scope = "loading all · Ctrl+X cancel"
 	}
 	if m.activityScope() != scopeExperiment {
-		p.add(m.activityDescription())
+		if m.activityScope() == scopePinned {
+			p.add(m.pinnedDescription())
+			if pins := m.currentRunPins(); pins != nil {
+				if pins.Err != "" {
+					p.add("Pins refresh failed; cached rows retained: " + clean(pins.Err))
+				}
+				if err := pins.RunErrors[r.Selected]; err != "" {
+					p.add("Selected pin unavailable · r retry · * unpin: " + clean(err))
+				} else if run := m.run(); run != nil && run.Info.LifecycleStage == "deleted" {
+					p.add("Selected pin deleted remotely · * unpin · i full name")
+				}
+			}
+		} else {
+			p.add(m.activityDescription())
+		}
 		if a := m.activityCurrent(); a != nil && a.Scope == scopeRunning && a.RetainedRun != "" {
 			p.add("Selected run ended · kept while reading · move away or r in list to dismiss")
 		}
@@ -291,7 +313,11 @@ func (m *model) runContent(w, h int) paneContent {
 	rows := m.runRows()
 	if len(rows) == 0 {
 		if !r.Pending {
-			p.add("No matching runs. / search · f filter · V visibility")
+			if m.activityScope() == scopePinned {
+				p.add("No matching pins. * pins a run in any experiment · / search · V visibility")
+			} else {
+				p.add("No matching runs. / search · f filter · V visibility")
+			}
 		}
 		return p
 	}
@@ -330,6 +356,9 @@ func (m *model) runContent(w, h int) paneContent {
 				}
 				if c.Kind == "attribute" && c.Key == "name" {
 					value = strings.Repeat("  ", min(item.Depth, 10)) + toggle + value
+					if m.runPinned(run.ID()) {
+						value = "★ " + value
+					}
 					if activityMark := m.activityRunMark(run.ID()); activityMark != "" {
 						value = activityMark + " " + value
 					}

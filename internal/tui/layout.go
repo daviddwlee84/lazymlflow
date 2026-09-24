@@ -197,8 +197,8 @@ func (m *model) handleMouse(msg tea.Msg) tea.Cmd {
 		}
 		if m.overlay != "" {
 			if m.isPicker() {
-				if m.overlay == "info" || m.overlay == "parent-info" {
-					m.menuIndex = max(0, m.menuIndex+d)
+				if m.isInformationPicker() {
+					m.scrollInformation(d)
 					return nil
 				}
 				m.menuIndex = clamp(m.menuIndex+d, 0, len(m.pickerItems())-1)

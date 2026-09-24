@@ -18,7 +18,7 @@ type pickerItem struct {
 func columnID(c core.ColumnSpec) string { return c.Kind + "/" + c.Key + "/" + c.DatasetContext }
 func (m *model) isPicker() bool {
 	switch m.overlay {
-	case "columns", "sort", "group", "layout", "visibility", "info", "parent-info", "activity-settings", "activity-subscriptions":
+	case "columns", "sort", "group", "layout", "visibility", "info", "run-info", "parent-info", "activity-settings", "activity-subscriptions":
 		return true
 	}
 	return false
@@ -163,8 +163,10 @@ func (m *model) handlePicker(msg tea.Msg, key string) tea.Cmd {
 		m.mousePressed = ""
 		return nil
 	}
-	if m.overlay == "info" || m.overlay == "parent-info" {
+	if m.isInformationPicker() {
 		switch key {
+		case "Y":
+			return m.copyInformationName()
 		case "r":
 			if m.overlay == "info" {
 				return m.refreshActivity(true, []string{m.selectedExperiment()})
@@ -172,9 +174,17 @@ func (m *model) handlePicker(msg tea.Msg, key string) tea.Cmd {
 		case "q", "enter":
 			m.overlay = ""
 		case "up", "k":
-			m.menuIndex = max(0, m.menuIndex-1)
+			m.scrollInformation(-1)
 		case "down", "j":
-			m.menuIndex++
+			m.scrollInformation(1)
+		case "pgup", "ctrl+u":
+			m.scrollInformation(-max(1, m.geometry().Content.H-2))
+		case "pgdown", "ctrl+d":
+			m.scrollInformation(max(1, m.geometry().Content.H-2))
+		case "home", "g":
+			m.menuIndex = 0
+		case "end", "G":
+			m.menuIndex = m.informationMaxOffset()
 		}
 		return nil
 	}
@@ -431,28 +441,8 @@ func (m *model) applySort() tea.Cmd {
 	return save
 }
 func (m *model) pickerView(w, h int) string {
-	if m.overlay == "info" || m.overlay == "parent-info" {
-		var lines []string
-		title := "Experiment information"
-		if m.overlay == "parent-info" {
-			title = "Parent run (context only)"
-			if m.parentInfo != nil {
-				r := m.parentInfo
-				lines = []string{"Name: " + r.Name(), "Run ID: " + r.ID(), "Experiment: " + r.Info.ExperimentID, "Status: " + r.Info.Status, "Parent: " + r.ParentID()}
-				lines = append(lines, kvLines(r.Data.Params)...)
-			} else {
-				lines = []string{"Loading parent…"}
-			}
-		} else if s := m.state(); s != nil {
-			for _, e := range s.Experiments {
-				if e.ID == s.Selected {
-					lines = []string{"Name: " + e.Name, "ID: " + e.ID, "Artifacts: " + e.ArtifactLocation, "Lifecycle: " + e.LifecycleStage}
-					lines = append(lines, kvLines(e.Tags)...)
-					break
-				}
-			}
-			lines = append(lines, m.experimentActivityOverview(s.Selected)...)
-		}
+	if m.isInformationPicker() {
+		title, lines := m.informationLines()
 		var wrapped []string
 		for _, line := range lines {
 			wrapped = append(wrapped, wrapText(clean(line), max(1, w-2))...)

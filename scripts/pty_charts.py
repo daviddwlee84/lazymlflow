@@ -35,7 +35,7 @@ def main():
             terminal = Terminal([binary, "--config", str(config)], env, root)
             terminal.resize(160, 48)
             terminal.wait(lambda: len(read_json_rows(state, "activity_records", "run_id")) == 5, "Activity fixture baseline")
-            terminal.send("1ggjjjj\r2gg3]")
+            terminal.send("1ggjjjjj\r2gg3]")
             terminal.wait(lambda: (fixture.ids["complete"], "train_loss") in fixture.histories(), "normal experiment chart")
             terminal.send("p \x1b[B \r")
             terminal.wait(lambda: (fixture.ids["complete"], "valid_corr") in fixture.histories(), "normal experiment overlay")
@@ -90,7 +90,7 @@ def main():
             terminal.wait(lambda: "Digits = raw logged samples" in terminal.text(mark), "chart reset restored raw defaults")
             assert "EMA 11 samples" not in terminal.text(mark) and "per-series 0–1" not in terminal.text(mark), "reset retained transforms"
 
-            terminal.send("1ggjjjj\r2gg3")
+            terminal.send("1ggjjjjj\r2gg3")
             mark = repaint(terminal)
             terminal.wait(lambda: "Shared Y axis" in terminal.text(mark), "leaving Activity restored experiment overlay")
             assert "EMA 11 samples" not in terminal.text(mark) and "per-series 0–1" not in terminal.text(mark), "Activity options overwrote experiment options"
