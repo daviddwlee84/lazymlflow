@@ -219,9 +219,10 @@ Python executable to verify it needed no Python runtime. Test servers and data
 were cleaned up.
 
 The repository CI repeats Go/race/PTY checks on macOS and Ubuntu, the three
-MLflow versions on Ubuntu, and a Docker-backed MinIO integration on Ubuntu.
-These workflows are configured; no remote CI run or release was published by
-this implementation session.
+MLflow versions on Ubuntu, and a Docker-backed S3 integration on Ubuntu. That
+fixture now defaults to the official RustFS 1.0.0 image pinned by digest; explicit
+native or custom-container MinIO fixtures remain supported. It also checks
+bounded presigned HTTP previews and rejection of implicit direct-S3 downloads.
 
 ## Boundaries
 

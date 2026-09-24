@@ -7,12 +7,15 @@ native MinIO executable:
   uv run --no-project --with mlflow==3.16.1 --with boto3 \
     python scripts/integration_s3.py
 
-The default starts a disposable MinIO container using tmpfs, random loopback
+The default starts a disposable, digest-pinned RustFS container using tmpfs, random loopback
 ports, fixture-only credentials, and a temporary MLflow SQLite server. Both
 routes receive identical artifact bytes. No existing target, store, bucket,
 credential, or Docker volume is used. All services are removed on exit.
 Use --minio-executable /path/to/minio to run an existing native MinIO binary
 against a temporary directory instead of Docker.
+Use --provider minio --image YOUR_MINIO_IMAGE for an explicitly supplied MinIO
+container. MinIO's historical public registries no longer allow anonymous pulls;
+the fixture never substitutes an unverified mirror or skips the S3 assertions.
 """
 
 import argparse
@@ -30,6 +33,27 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+
+
+# Official multi-platform release, shared with internal/server/render.go.
+# https://github.com/rustfs/rustfs/releases/tag/1.0.0
+RUSTFS_IMAGE = "rustfs/rustfs:1.0.0@sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff"
+
+
+def container_settings(provider):
+    if provider == "rustfs":
+        return (["--tmpfs", "/data:rw,uid=10001,gid=10001,mode=0700",
+                 "--env", "RUSTFS_ACCESS_KEY=lazymlflow-test",
+                 "--env", "RUSTFS_SECRET_KEY=lazymlflow-test-secret",
+                 "--env", "RUSTFS_ADDRESS=:9000",
+                 "--env", "RUSTFS_CONSOLE_ENABLE=false",
+                 "--env", "RUSTFS_REGION=us-east-1"], ["/data"], "/health")
+    if provider == "minio":
+        return (["--tmpfs", "/data",
+                 "--env", "MINIO_ROOT_USER=lazymlflow-test",
+                 "--env", "MINIO_ROOT_PASSWORD=lazymlflow-test-secret"],
+                ["server", "/data", "--address", ":9000"], "/minio/health/ready")
+    raise ValueError(f"unknown S3 fixture provider: {provider}")
 
 
 def wait_healthy(url, process=None, timeout=60):
@@ -86,8 +110,9 @@ def native_minio(executable, root):
 
 
 @contextlib.contextmanager
-def minio(image):
+def docker_s3(image, provider="rustfs"):
     name = "lazymlflow-s3-" + uuid.uuid4().hex[:12]
+    options, command, health = container_settings(provider)
     # A public test image must not ask a user's registry credential helper to
     # unlock a keychain. Preserve the chosen daemon, isolate registry settings.
     host = os.environ.get("DOCKER_HOST") or subprocess.check_output(
@@ -106,18 +131,15 @@ def minio(image):
         try:
             result = subprocess.run([
                 *docker, "run", "--detach", "--rm", "--name", name,
-                "--publish", "127.0.0.1::9000", "--tmpfs", "/data",
-                "--env", "MINIO_ROOT_USER=lazymlflow-test",
-                "--env", "MINIO_ROOT_PASSWORD=lazymlflow-test-secret",
-                image, "server", "/data", "--address", ":9000",
+                "--publish", "127.0.0.1::9000", *options, image, *command,
             ], env=docker_env, check=False, capture_output=True, text=True, timeout=240)
             if result.returncode:
-                raise RuntimeError("start disposable MinIO: " + result.stderr.strip())
+                raise RuntimeError(f"start disposable {provider}: " + result.stderr.strip())
             binding = subprocess.check_output(
                 [*docker, "port", name, "9000/tcp"], env=docker_env, text=True, timeout=10
             ).strip()
             endpoint = "http://" + binding
-            wait_healthy(endpoint + "/minio/health/ready")
+            wait_healthy(endpoint + health)
             yield endpoint
         finally:
             subprocess.run([*docker, "rm", "--force", name], env=docker_env,
@@ -156,7 +178,9 @@ def tracking_server(root, env):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", default="./bin/lazymlflow")
-    parser.add_argument("--image", default="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z")
+    parser.add_argument("--provider", choices=("rustfs", "minio"), default="rustfs",
+                        help="Docker fixture command/environment (default: rustfs; ignored by --minio-executable)")
+    parser.add_argument("--image", help="Override the selected Docker provider's image (default: pinned official RustFS)")
     parser.add_argument("--minio-executable", help="Use a native MinIO binary and temporary data directory instead of Docker")
     args = parser.parse_args()
     binary = str(Path(args.binary).resolve())
@@ -164,6 +188,9 @@ def main():
         parser.error("build lazymlflow first or provide --binary")
     if args.minio_executable and not os.access(args.minio_executable, os.X_OK):
         parser.error("--minio-executable must name an executable native to this machine")
+    if not args.minio_executable and args.provider == "minio" and not args.image:
+        parser.error("--provider minio requires an explicit --image; alternatively use --minio-executable")
+    image = args.image or RUSTFS_IMAGE
     try:
         import boto3
         os.environ["MLFLOW_DISABLE_AGENT_HINT"] = "1"
@@ -185,12 +212,13 @@ def main():
         MLFLOW_SERVER_ENABLE_JOB_EXECUTION="false",
     )
     version = importlib.metadata.version("mlflow")
-    print(f"Starting disposable MinIO + MLflow {version} integration", flush=True)
+    provider = "native MinIO" if args.minio_executable else args.provider
+    print(f"Starting disposable {provider} + MLflow {version} integration", flush=True)
     with contextlib.ExitStack() as stack:
         directory = stack.enter_context(tempfile.TemporaryDirectory(prefix="lazymlflow-s3-"))
         root = Path(directory)
         endpoint = stack.enter_context(native_minio(args.minio_executable, root)
-                                       if args.minio_executable else minio(args.image))
+                                       if args.minio_executable else docker_s3(image, args.provider))
         os.environ["MLFLOW_S3_ENDPOINT_URL"] = endpoint
         env = dict(os.environ, XDG_CONFIG_HOME=str(root / "config"), XDG_DATA_HOME=str(root / "data"),
                    XDG_CACHE_HOME=str(root / "cache"), XDG_STATE_HOME=str(root / "state"),
@@ -202,11 +230,11 @@ def main():
         s3.create_bucket(Bucket="lazymlflow-test")
         seed = root / "seed"
         (seed / "nested").mkdir(parents=True)
-        (seed / "nested" / "weights.bin").write_bytes(b"\x00\x01S3-MinIO-MLflow\xff")
+        (seed / "nested" / "weights.bin").write_bytes(b"\x00\x01S3-fixture-MLflow\xff")
         (seed / "專案 é.txt").write_text("Identical artifact data through proxy and S3.\n", encoding="utf-8")
         config = root / "targets.toml"
 
-        def call(*arguments, expected=0):
+        def execute(*arguments, expected=0):
             process = subprocess.run([binary, "--config", str(config), *arguments],
                                      cwd=root, env=env, capture_output=True, text=True,
                                      timeout=120)
@@ -214,6 +242,10 @@ def main():
                 raise AssertionError(
                     f"{arguments}: exit {process.returncode}\n{process.stdout}\n{process.stderr}"
                 )
+            return process
+
+        def call(*arguments, expected=0):
+            process = execute(*arguments, expected=expected)
             if "--json" in arguments and process.stdout.strip():
                 return json.loads(process.stdout)
             return process.stdout
@@ -239,6 +271,24 @@ def main():
             call("targets", "add", "proxy", "--uri", tracking,
                  "--python", str(root / "no-python-needed"))
             call("targets", "add", "direct", "--uri", tracking, "--python", sys.executable)
+            print("Checking bounded HTTP proxy previews and rejecting implicit direct-S3 downloads", flush=True)
+            text = (seed / "專案 é.txt").read_text(encoding="utf-8")
+            preview = call("--target", "proxy", "artifacts", "preview", runs["proxy"], "專案 é.txt", "--json")
+            assert preview["text"] == text and not preview["truncated"] and not preview["binary"], preview
+            assert preview["info"]["size"] == len(text.encode("utf-8"))
+            # MLflow 3.16 supplies a presigned URL for S3; the invalid Python
+            # target above proves the complete path uses native Go HTTP only.
+            assert not preview["info"]["may_download_whole"], preview
+            rejected = execute("--target", "proxy", "artifacts", "preview", runs["proxy"], "專案 é.txt",
+                               "--max-bytes", "8", "--json", expected=2)
+            assert not rejected.stdout.strip() and "--allow-large" in rejected.stderr
+            preview = call("--target", "proxy", "artifacts", "preview", runs["proxy"], "專案 é.txt",
+                           "--max-bytes", "8", "--allow-large", "--json")
+            assert preview["truncated"] and preview["text"] == text[:8] and preview["bytes_read"] == 9, preview
+            assert not preview["info"]["may_download_whole"], preview
+            rejected = execute("--target", "direct", "artifacts", "preview", runs["direct"], "專案 é.txt",
+                               "--max-bytes", "8", "--allow-large", "--json", expected=1)
+            assert not rejected.stdout.strip() and "explicit download" in rejected.stderr
             for route, run_id in runs.items():
                 print(f"Checking {route}: list, nested directory, Unicode file, full download", flush=True)
                 listing = call("--target", route, "artifacts", "ls", run_id, "--json")
@@ -262,7 +312,8 @@ def main():
                 assert (full_output / "專案 é.txt").read_bytes() == (seed / "專案 é.txt").read_bytes()
                 call("--target", route, "artifacts", "download", run_id,
                      "--dest", str(full_output), "--json", expected=1)
-        print(f"PASS real MLflow {version} + MinIO: native proxy REST and direct S3 CLI list/file/directory/root downloads", flush=True)
+        print(f"PASS real MLflow {version} + {provider}: bounded native HTTP previews and explicit direct-S3 rejection; "
+              "native proxy REST and direct S3 CLI list/file/directory/root downloads", flush=True)
 
 
 def interrupt(_signum, _frame):

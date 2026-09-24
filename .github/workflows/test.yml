@@ -67,6 +67,7 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: astral-sh/setup-uv@v6
+      - run: python3 -m unittest discover -s scripts -p test_integration_s3.py
       - run: go build -o bin/lazymlflow ./cmd/lazymlflow
       - run: uv run --no-project --python 3.12 --with mlflow==3.16.1 --with boto3 python scripts/integration_s3.py
 

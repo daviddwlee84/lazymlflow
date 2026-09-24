@@ -773,8 +773,10 @@ The real-MLflow test creates disposable file/SQLite stores, verifies query and
 download behavior, and checks that SQLite bytes remain unchanged. Run it with
 MLflow 2.22.0, 3.12.0 or 3.16.1 in isolated environments. The PTY test uses only
 disposable HTTP fixtures and temporary configuration. The optional S3 test needs
-Docker and starts a temporary MinIO container to exercise proxy and direct
-artifact downloads with identical data.
+Docker and starts a temporary, digest-pinned RustFS container to exercise bounded
+HTTP previews and proxy/direct artifact downloads with identical data. Explicit
+MinIO fixtures remain available with `--minio-executable`, or
+`--provider minio --image YOUR_IMAGE`.
 
 See [the verification record](docs/verification.md) for tested versions,
 platforms, scenarios and first-version boundaries.
