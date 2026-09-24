@@ -156,6 +156,8 @@ type model struct {
 	parentGen                               uint64
 	pickerSearch                            textinput.Model
 	pickerTyping                            bool
+	helpSearch                              textinput.Model
+	helpTyping                              bool
 }
 
 func newModel(ctx context.Context, o Options) *model {
@@ -167,6 +169,8 @@ func newModel(ctx context.Context, o Options) *model {
 	m.writer = newStateWriter()
 	m.pickerSearch = textinput.New()
 	m.pickerSearch.Prompt = "Search: "
+	m.helpSearch = textinput.New()
+	m.helpSearch.Prompt = "Search: "
 	if o.Mouse != nil {
 		m.layout.Mouse = *o.Mouse
 	}
@@ -364,6 +368,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = max(1, v.Width)
 		m.height = max(1, v.Height)
 		m.input.SetWidth(max(1, m.width-8))
+		m.helpSearch.SetWidth(max(1, m.width-12))
 		if m.targetForm != nil {
 			return m, m.updateTargetForm(v)
 		}
@@ -435,6 +440,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.handleInput(msg, key)
 		}
 		if m.overlay != "" {
+			if m.overlay == "help" {
+				return m, m.handleHelp(msg, key)
+			}
 			if m.isPicker() {
 				return m, m.handlePicker(msg, key)
 			}
@@ -465,6 +473,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.targetForm != nil {
 		return m, m.updateTargetForm(msg)
+	}
+	if m.overlay == "help" && m.helpTyping {
+		return m, m.updateHelpSearch(msg)
 	}
 	if m.isPicker() && m.pickerTyping {
 		var cmd tea.Cmd
@@ -639,7 +650,15 @@ func (m *model) perform(id string) tea.Cmd {
 	case "quit":
 		m.stopAll()
 		return tea.Quit
-	case "help", "palette":
+	case "help":
+		m.overlay = id
+		m.menuIndex, m.menuOffset = 0, 0
+		m.prefix, m.helpTyping = false, false
+		m.mousePressed = ""
+		m.helpSearch.SetValue("")
+		m.helpSearch.SetWidth(max(1, m.width-12))
+		m.helpSearch.Blur()
+	case "palette":
 		m.overlay = id
 		m.menuIndex = 0
 		m.menuOffset = 0

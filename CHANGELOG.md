@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add `/` live filtering to contextual help, including shortcut keys and descriptions, with Enter to keep the filter and Esc to clear it before closing.
+
 ## 0.3.1 — 2026-09-25
 
 - Add cross-experiment Running, Recent, Unread and Alerts views, persistent local read and acknowledgement state, cached experiment counts, and exact-key metric-update subscriptions. Completed selected runs stay visible while being read in Running.

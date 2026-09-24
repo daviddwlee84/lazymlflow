@@ -623,6 +623,9 @@ func (m *model) handleOverlay(key string) tea.Cmd {
 	if m.formPending {
 		return nil
 	}
+	if m.overlay == "help" {
+		return m.handleHelp(nil, key)
+	}
 	if key == "esc" || key == "q" {
 		m.overlay = ""
 		return nil
@@ -663,11 +666,8 @@ func (m *model) handleOverlay(key string) tea.Cmd {
 		length = len(m.targets)
 	case "metrics":
 		length = len(m.metricKeys())
-	case "palette", "help":
+	case "palette":
 		length = len(m.actions())
-		if m.overlay == "help" {
-			length += 4
-		}
 	}
 	switch key {
 	case "up", "k":

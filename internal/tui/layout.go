@@ -390,11 +390,13 @@ func (m *model) activateHit(id string) tea.Cmd {
 func (m *model) overlayHit(x, y int, r rect) string {
 	count := 0
 	switch m.overlay {
+	case "help":
+		return m.helpHit(x, y, r)
 	case "targets":
 		count = len(m.targets)
 	case "metrics":
 		count = len(m.metricKeys())
-	case "help", "palette":
+	case "palette":
 		count = len(m.actions()) + 4
 	default:
 		return ""

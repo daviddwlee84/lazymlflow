@@ -198,6 +198,8 @@ func (m *model) contextLine() string {
 	}
 	if m.overlay != "" {
 		switch m.overlay {
+		case "help":
+			return "Search shortcut keys and descriptions for the current view."
 		case "columns":
 			return "Columns are saved separately for each experiment; names match logged keys exactly."
 		case "sort":
@@ -254,6 +256,14 @@ func (m *model) footer() string {
 			}
 		}
 		switch m.overlay {
+		case "help":
+			if m.helpTyping {
+				return "Type to filter · ↑↓ scroll · Enter keep filter · Esc clear"
+			}
+			if m.helpSearch.Value() != "" {
+				return "↑↓/jk scroll · / edit filter · Esc clear · Enter / q close"
+			}
+			return "↑↓/jk scroll · / filter · Enter / Esc / q close"
 		case "targets":
 			return "↑↓/jk select · Enter connect · a add · e edit · s setup server · E environment · Esc back"
 		case "overwrite":
@@ -385,7 +395,9 @@ func (m *model) overlayView(w, h int) string {
 	case "metrics":
 		title = "Choose metric history"
 		lines = m.metricKeys()
-	case "help", "palette":
+	case "help":
+		return m.helpView(w, h)
+	case "palette":
 		title = "Keyboard actions"
 		for _, a := range m.actions() {
 			lines = append(lines, fit(strings.Join(a.Keys, " / "), 20)+a.Label)

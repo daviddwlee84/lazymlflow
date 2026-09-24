@@ -310,6 +310,10 @@ local visibility choices persist across launches.
 | `?` / `:` | Context help / action menu |
 | Esc / `q` | Back / quit |
 
+In help, `/` filters shortcut keys and descriptions as you type, ignoring case.
+Enter keeps the filter and returns to scrolling; Esc clears the filter, then a
+second Esc closes help. Searching help preserves the underlying pane and selection.
+
 Text fields own printable keys; typing `q`, `j` or `/` never activates a
 navigation shortcut. The help/footer describe the actions valid in the current
 context. In Runs, `[`/`]` pan additional columns while keeping Run name visible.

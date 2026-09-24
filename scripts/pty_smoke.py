@@ -261,8 +261,19 @@ def main():
             terminal.send("d\x01\x0b" + str(output) + "\r")
             terminal.wait(output.exists, "artifact download")
             assert output.read_text() == "downloaded report\n"
+            mark = len(terminal.raw)
             terminal.send("?")
-            assert terminal.process.poll() is None
+            terminal.wait(lambda: "Keyboard actions" in terminal.text(mark), "context help")
+            terminal.send("/no-match-jkhql?123M")
+            terminal.wait(lambda: "No matching help entries" in terminal.text(mark), "help live filter owns shortcuts")
+            terminal.send("\x15DOWNLOAD\r")
+            assert terminal.process.poll() is None, "help search dispatched quit"
+            terminal.wait(lambda: "edit filter" in terminal.text(mark), "Enter keeps help filter")
+            mark = len(terminal.raw)
+            terminal.send("\x1b")
+            # The header is unchanged, so the terminal may repaint only its
+            # count. A restored nonmatching row proves help remains open.
+            terminal.wait(lambda: "Activity inbox" in terminal.text(mark), "Esc clears help filter without closing")
             terminal.send("\x1b")
             for width, height in ((80, 24), (38, 12), (12, 4), (140, 42)):
                 terminal.resize(width, height)
