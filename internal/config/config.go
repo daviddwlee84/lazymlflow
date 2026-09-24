@@ -26,9 +26,11 @@ type Preferences struct {
 }
 
 type Config struct {
-	DefaultTarget string        `toml:"default_target,omitempty" json:"default_target,omitempty"`
-	Targets       []core.Target `toml:"targets,omitempty" json:"targets"`
-	TUI           Preferences   `toml:"tui" json:"tui"`
+	DefaultTarget string                `toml:"default_target,omitempty" json:"default_target,omitempty"`
+	Targets       []core.Target         `toml:"targets,omitempty" json:"targets"`
+	TUI           Preferences           `toml:"tui" json:"tui"`
+	Activity      core.ActivitySettings `toml:"activity" json:"activity"`
+	Alerts        core.AlertSettings    `toml:"alerts" json:"alerts"`
 	path          string
 	original      []byte
 	existed       bool
@@ -65,7 +67,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &Config{path: path}
+	c := defaultConfig(path)
 	b, err := os.ReadFile(path)
 	if os.IsNotExist(err) && !explicit {
 		return c, nil
@@ -93,7 +95,11 @@ func New(path string) *Config {
 	if path == "" {
 		path = DefaultPath()
 	}
-	return &Config{path: path}
+	return defaultConfig(path)
+}
+
+func defaultConfig(path string) *Config {
+	return &Config{path: path, Activity: core.DefaultActivitySettings()}
 }
 func (c *Config) SourcePath() string { return c.path }
 
@@ -103,6 +109,12 @@ var version = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+([A-Za-z0-9.+-]*)$`)
 var sshHost = regexp.MustCompile(`^[A-Za-z0-9\[][A-Za-z0-9._@:\[\]-]*$`)
 
 func (c *Config) Validate() error {
+	if err := core.ValidateActivitySettings(c.Activity); err != nil {
+		return fmt.Errorf("activity: %w", err)
+	}
+	if err := core.ValidateAlertSettings(c.Alerts); err != nil {
+		return fmt.Errorf("alerts: %w", err)
+	}
 	if c.TUI.RefreshSeconds < 0 {
 		return errors.New("tui.refresh_seconds must be zero or positive")
 	}

@@ -33,18 +33,40 @@ func (m *model) buildRunRows() []core.RunRow {
 	if r == nil {
 		return nil
 	}
+	if m.activityScope() != scopeExperiment {
+		return m.activityPresentationRows(r)
+	}
 	var rows []core.Run
 	q := strings.ToLower(r.Local)
 	if q == "" {
 		rows = r.Rows
 	} else {
 		for _, run := range r.Rows {
-			if strings.Contains(strings.ToLower(run.Name()+" "+run.ID()+" "+run.Info.Status), q) {
+			if strings.Contains(strings.ToLower(run.Name()+" "+run.ID()+" "+run.Info.Status+" "+m.activityExperimentName(run.Info.ExperimentID)), q) {
 				rows = append(rows, run)
 			}
 		}
 	}
 	return m.catalogInspectionRows(core.BuildRunRows(rows, r.View, m.state().Visibility))
+}
+
+func (m *model) activityPresentationRows(r *runState) []core.RunRow {
+	query := strings.ToLower(r.Local)
+	var rows []core.Run
+	for _, run := range r.Rows {
+		if core.Visible(m.state().Visibility[core.VisibilityKey("run", run.ID())], r.View.Visibility) && strings.Contains(strings.ToLower(run.Name()+" "+run.ID()+" "+run.Info.Status+" "+m.activityExperimentName(run.Info.ExperimentID)), query) {
+			rows = append(rows, run)
+		}
+	}
+	if len(r.View.Sort) > 0 {
+		rows = core.SortRuns(rows, r.View.Sort)
+	}
+	out := make([]core.RunRow, 0, len(rows))
+	for i := range rows {
+		run := &rows[i]
+		out = append(out, core.RunRow{ID: run.ID(), Kind: "run", Run: run, Label: run.Name()})
+	}
+	return out
 }
 func (m *model) refreshRowCache() {
 	r := m.runs()
@@ -138,6 +160,7 @@ func (m *model) experimentContent(w, h int) paneContent {
 		p.Lines = []string{"Connecting in background…", "Navigation remains available.", "Esc cancels; t switches target."}
 		return p
 	}
+	m.activitySidebar(&p, w)
 	p.add(fmt.Sprintf("%d loaded%s · %s", len(s.Experiments), pending(s.Pending), m.layout.ExperimentVisibility))
 	if s.Local != "" {
 		p.add("Local: " + clean(s.Local))
@@ -165,7 +188,12 @@ func (m *model) experimentContent(w, h int) paneContent {
 		if v := s.Visibility[core.VisibilityKey("experiment", e.ID)]; v != "" && v != core.VisibilityNormal {
 			label += " (" + string(v) + ")"
 		}
-		p.addHit(row(label, e.ID == s.Selected, w), "experiment:"+e.ID, w)
+		badge := m.experimentActivityBadge(e.ID)
+		if textWidth(badge) > w/2 {
+			badge = ""
+		}
+		label = middleName(label, max(1, w-2-textWidth(badge))) + badge
+		p.addHit(row(label, e.ID == s.Selected && m.activityScope() == scopeExperiment, w), "experiment:"+e.ID, w)
 	}
 	if s.Next != "" {
 		p.add("n: next page (server ordered)")
@@ -175,13 +203,16 @@ func (m *model) experimentContent(w, h int) paneContent {
 func (m *model) runContent(w, h int) paneContent {
 	p := paneContent{}
 	r := m.runs()
-	if r == nil || m.selectedExperiment() == "" {
+	if r == nil || m.selectedExperiment() == "" && m.activityScope() == scopeExperiment {
 		p.add("Choose an experiment.")
 		return p
 	}
 	x := 0
 	controlLine := ""
 	for _, control := range []struct{ ID, Label string }{{"columns", "Columns"}, {"sort", "Sort"}, {"group", "Group by"}, {"layout", "Layout"}} {
+		if control.ID == "group" && m.activityScope() != scopeExperiment {
+			continue
+		}
 		label := "[" + control.Label + "] "
 		clippedHit(&p, x, 0, textWidth(label), w, "action:"+control.ID)
 		controlLine += label
@@ -198,7 +229,15 @@ func (m *model) runContent(w, h int) paneContent {
 	if r.LoadingAll {
 		scope = "loading all · Ctrl+X cancel"
 	}
-	p.add(fmt.Sprintf("%d loaded%s · %s · %s", len(r.Rows), pending(r.Pending), scope, r.View.Visibility))
+	if m.activityScope() != scopeExperiment {
+		p.add(m.activityDescription())
+		if a := m.activityCurrent(); a != nil && a.Err != "" {
+			p.add("Refresh failed; cached rows retained")
+			p.add(clean(a.Err))
+		}
+	} else {
+		p.add(fmt.Sprintf("%d loaded%s · %s · %s", len(r.Rows), pending(r.Pending), scope, r.View.Visibility))
+	}
 	if r.Local != "" {
 		p.add("Local: " + clean(r.Local))
 	}
@@ -278,8 +317,14 @@ func (m *model) runContent(w, h int) paneContent {
 			for _, ci := range indices {
 				c := cols[ci]
 				value := core.DisplayValue(run, c)
+				if m.activityScope() != scopeExperiment && c.Kind == "attribute" && c.Key == "experiment_id" {
+					value = m.activityExperimentName(run.Info.ExperimentID)
+				}
 				if c.Kind == "attribute" && c.Key == "name" {
 					value = strings.Repeat("  ", min(item.Depth, 10)) + toggle + value
+					if activityMark := m.activityRunMark(run.ID()); activityMark != "" {
+						value = activityMark + " " + value
+					}
 					if item.Note != "" {
 						value += " · " + item.Note
 					}

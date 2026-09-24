@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,43 +23,48 @@ type detailRow struct {
 	Depth, Index                      int
 }
 type inspectionView struct {
-	DatasetKey                    string
-	Query                         string
-	Sort                          int
-	Index                         int
-	Selected                      string
-	Rows, All                     []detailRow
-	Dataset                       int
-	Expanded                      map[string]bool
-	Schema                        core.DatasetSchema
-	Profile                       core.DatasetProfile
-	Run                           *core.Run
-	Dashboard, ExpandedChart, Raw bool
-	MetricScope                   int
-	Overlay                       []string
-	Cursor                        int
+	DatasetKey                         string
+	Query                              string
+	Sort                               int
+	Index                              int
+	Selected                           string
+	Rows, All                          []detailRow
+	Dataset                            int
+	Expanded                           map[string]bool
+	Schema                             core.DatasetSchema
+	Profile                            core.DatasetProfile
+	Run                                *core.Run
+	Dashboard, ExpandedChart, Raw      bool
+	MetricScope                        int
+	Overlay                            []string
+	Cursor                             int
+	MetricMetadata                     string
+	MetricRevision, MetricViewRevision uint64
 }
 type inspectionState struct {
-	CompareCursor int
-	Views         map[string]*inspectionView
-	Histories     map[string]*historyEntry
-	Search        textinput.Model
-	Typing        bool
-	Picker        []string
-	PickerIndex   int
-	Value         string
-	Auto          bool
-	PollGen       uint64
-	RunGen        uint64
-	RunPending    bool
-	Slots         chan struct{}
-	ASCII         bool
+	CompareCursor     int
+	Views             map[string]*inspectionView
+	Histories         map[string]*historyEntry
+	Search            textinput.Model
+	Typing            bool
+	Picker            []string
+	PickerIndex       int
+	Value             string
+	Auto              bool
+	PollGen           uint64
+	RunGen            uint64
+	RunPending        bool
+	Slots             chan struct{}
+	ASCII             bool
+	MetricPreferences map[string]*experimentMetricPreferences
+	OverlayDraft      []string
+	OverlayDraftKey   string
 }
 
 func (m *model) initInspection() {
 	s := textinput.New()
 	s.Prompt = "Search: "
-	m.inspect = &inspectionState{Views: map[string]*inspectionView{}, Histories: map[string]*historyEntry{}, Search: s, Slots: make(chan struct{}, 4), Auto: m.opts.RefreshSeconds > 0, ASCII: os.Getenv("TERM") == "dumb" || os.Getenv("LC_ALL") == "C" || os.Getenv("LC_ALL") == "POSIX"}
+	m.inspect = &inspectionState{Views: map[string]*inspectionView{}, Histories: map[string]*historyEntry{}, MetricPreferences: map[string]*experimentMetricPreferences{}, Search: s, Slots: make(chan struct{}, 4), Auto: m.opts.RefreshSeconds > 0, ASCII: os.Getenv("TERM") == "dumb" || os.Getenv("LC_ALL") == "C" || os.Getenv("LC_ALL") == "POSIX"}
 }
 func (m *model) isInspectionTab() bool { return m.tab == 1 || m.tab == 2 || m.tab == 3 || m.tab == 5 }
 func (m *model) inspectionKey() string {
@@ -94,7 +100,11 @@ func (m *model) syncInspection() {
 		v = &inspectionView{Expanded: map[string]bool{}}
 		m.inspect.Views[key] = v
 	}
-	if v.Run == r {
+	metricChanged := false
+	if m.tab == 1 {
+		metricChanged = m.syncMetricPreferences(v, r)
+	}
+	if v.Run == r && !metricChanged {
 		return
 	}
 	v.Run = r
@@ -185,8 +195,22 @@ func (m *model) filterInspection(v *inspectionView) {
 		v.Rows = append(v.Rows, r)
 	}
 	if m.tab != 5 || v.Sort != 0 {
+		pins := map[string]int{}
+		if m.tab == 1 {
+			for i, key := range m.metricPins(v.Run) {
+				pins[key] = i
+			}
+		}
 		sort.SliceStable(v.Rows, func(i, j int) bool {
 			a, b := v.Rows[i], v.Rows[j]
+			ap, aPinned := pins[a.Key]
+			bp, bPinned := pins[b.Key]
+			if aPinned != bPinned {
+				return aPinned
+			}
+			if aPinned && ap != bp {
+				return ap < bp
+			}
 			cmp := 0
 			switch v.Sort / 2 {
 			case 1:
@@ -257,6 +281,7 @@ func (m *model) inspectionActions() []action {
 	a := []action{act("inspect-search", "/", "Search this table"), act("inspect-sort", "s", "Sort this table"), act("inspect-copy", "Y", "Copy selected value")}
 	if m.tab == 1 {
 		a = append(a, act("inspect-metric", "m", "Choose metric"), act("inspect-dashboard", "v", "Table / metric dashboard"), act("inspect-overlay", "p", "Overlay up to four metrics"), act("inspect-auto", "R", "Toggle automatic metric refresh"), act("inspect-ascii", "u", "Toggle Braille / ASCII curves"), act("inspect-system", "e", "Model / system / all metrics"))
+		a = append(a, act("inspect-pin", "*", "Pin / unpin metric for this experiment"), act("inspect-pin-prev", "<", "Move pinned metric earlier"), act("inspect-pin-next", ">", "Move pinned metric later"))
 	}
 	if m.tab == 5 {
 		a = append(a, act("inspect-dataset-prev", "{", "Previous dataset"), act("inspect-dataset-next", "}", "Next dataset"), act("inspect-raw", "v", "Schema table / raw JSON"), act("inspect-expand", "space", "Expand / collapse nested field"))
@@ -269,7 +294,7 @@ func (m *model) inspectionFooter() string {
 		case "inspect-value":
 			return "↑↓/jk scroll · Y copy full value · Esc return"
 		case "inspect-overlay":
-			return "Space toggle (maximum four) · Enter apply · / search · Esc return"
+			return "Space toggle (maximum four) · * pin · < > order · Enter apply · / search · Esc cancel"
 		default:
 			return "↑↓ select · Enter apply · / search · Esc return"
 		}
@@ -281,7 +306,7 @@ func (m *model) inspectionFooter() string {
 		if v := m.inspectionView(); v != nil && v.ExpandedChart {
 			return "←→/hl sample · a axis · p overlay · u ASCII · R auto · Esc table · z zoom"
 		}
-		return "↑↓ select · / search · s sort · Enter curve · v dashboard · p overlay · m metric · R auto · z zoom"
+		return "↑↓ select · / search · s sort · Enter curve · v dashboard · p overlay · * pin · < > order · R auto · z zoom"
 	}
 	if m.tab == 5 {
 		return "↑↓ select · / features · Space expand · { } dataset · v raw · Enter full field · Y copy · z zoom"
@@ -318,11 +343,27 @@ func (m *model) performInspection(id string) (tea.Cmd, bool) {
 		m.inspect.Typing = false
 		m.inspect.PickerIndex = 0
 		m.overlay = id
+		if id == "inspect-overlay" {
+			m.beginMetricOverlay(v)
+		}
 		return nil, true
+	case "inspect-pin", "inspect-pin-prev", "inspect-pin-next":
+		if v == nil {
+			return nil, true
+		}
+		delta := 0
+		if id == "inspect-pin-prev" {
+			delta = -1
+		}
+		if id == "inspect-pin-next" {
+			delta = 1
+		}
+		return m.changeMetricPin(v.Selected, delta), true
 	case "inspect-dashboard":
 		if v != nil {
 			v.Dashboard = !v.Dashboard
 			v.ExpandedChart = false
+			m.rememberMetricMode(v)
 			return m.ensureHistories(false), true
 		}
 		return nil, true
@@ -384,6 +425,7 @@ func (m *model) performInspection(id string) (tea.Cmd, bool) {
 		if m.tab == 1 {
 			v.ExpandedChart = true
 			v.Cursor = -1
+			m.rememberMetricMode(v)
 			return m.ensureHistories(false), true
 		}
 		if len(v.Rows) > 0 {
@@ -406,6 +448,9 @@ func (m *model) performInspection(id string) (tea.Cmd, bool) {
 		if in && v != nil && (v.ExpandedChart || v.Raw) {
 			v.ExpandedChart = false
 			v.Raw = false
+			if m.tab == 1 {
+				m.rememberMetricMode(v)
+			}
 			return m.ensureHistories(false), true
 		}
 	case "left", "right":
@@ -471,7 +516,7 @@ func (m *model) copyInspection() tea.Cmd {
 func (m *model) inspectionPickerKeys() []string {
 	q := strings.ToLower(m.inspect.Search.Value())
 	var keys []string
-	for _, key := range m.metricKeys() {
+	for _, key := range m.metricPickerCandidates() {
 		if strings.Contains(strings.ToLower(key), q) {
 			keys = append(keys, key)
 		}
@@ -483,6 +528,8 @@ func (m *model) updateInspection(msg tea.Msg) (tea.Cmd, bool) {
 		return nil, false
 	}
 	switch v := msg.(type) {
+	case metricPreferencesLoadedMsg:
+		return m.acceptMetricPreferences(v), true
 	case metricLoadedMsg:
 		return m.acceptMetric(v), true
 	case inspectionTickMsg:
@@ -522,6 +569,7 @@ func (m *model) updateInspection(msg tea.Msg) (tea.Cmd, bool) {
 		return nil, false
 	}
 	if k == "esc" {
+		m.inspect.OverlayDraft, m.inspect.OverlayDraftKey = nil, ""
 		if m.overlay == "inspect-search" {
 			v := m.inspectionView()
 			if v != nil {
@@ -586,6 +634,16 @@ func (m *model) updateInspection(msg tea.Msg) (tea.Cmd, bool) {
 		keys = m.inspectionPickerKeys()
 	}
 	m.inspect.PickerIndex = clamp(m.inspect.PickerIndex, 0, len(keys)-1)
+	if (k == "*" || k == "<" || k == ">") && m.overlay != "inspect-sort" && !m.compare && len(keys) > 0 {
+		delta := 0
+		if k == "<" {
+			delta = -1
+		}
+		if k == ">" {
+			delta = 1
+		}
+		return m.changeMetricPin(keys[m.inspect.PickerIndex], delta), true
+	}
 	switch k {
 	case "up", "k":
 		m.inspect.PickerIndex = max(0, m.inspect.PickerIndex-1)
@@ -597,25 +655,12 @@ func (m *model) updateInspection(msg tea.Msg) (tea.Cmd, bool) {
 		m.inspect.PickerIndex = max(0, len(keys)-1)
 	case "space", "enter":
 		v := m.inspectionView()
-		if m.overlay == "inspect-overlay" && v != nil && len(keys) > 0 {
+		if m.overlay == "inspect-overlay" && v != nil {
 			if k == "enter" {
-				m.overlay = ""
-				v.ExpandedChart = true
-				return m.ensureHistories(false), true
+				return m.applyMetricOverlay(v), true
 			}
-			key := keys[m.inspect.PickerIndex]
-			found := -1
-			for i, x := range v.Overlay {
-				if x == key {
-					found = i
-				}
-			}
-			if found >= 0 {
-				v.Overlay = append(v.Overlay[:found], v.Overlay[found+1:]...)
-			} else if len(v.Overlay) < 4 {
-				v.Overlay = append(v.Overlay, key)
-			} else {
-				m.status = "Overlay supports at most four metrics"
+			if len(keys) > 0 {
+				m.toggleMetricOverlay(keys[m.inspect.PickerIndex])
 			}
 			return nil, true
 		}
@@ -639,6 +684,7 @@ func (m *model) updateInspection(msg tea.Msg) (tea.Cmd, bool) {
 			m.filterInspection(v)
 			m.metric = keys[m.inspect.PickerIndex]
 			v.ExpandedChart = true
+			m.rememberMetricMode(v)
 		}
 		m.overlay = ""
 		return m.ensureHistories(false), true
@@ -690,7 +736,7 @@ func (m *model) inspectionOverlay(w, h int) (string, bool) {
 			lines = append(lines, m.inspect.Search.View())
 		}
 		if m.overlay == "inspect-overlay" {
-			title = "Overlay metrics · shared Y axis · maximum four"
+			title = "Overlay metrics · this experiment / session · maximum four"
 		} else if m.overlay == "inspect-sort" {
 			title = "Sort table"
 		} else {
@@ -700,14 +746,16 @@ func (m *model) inspectionOverlay(w, h int) (string, bool) {
 		start := listStart(index, len(keys), max(1, h-3))
 		for i := start; i < min(len(keys), start+max(1, h-3)); i++ {
 			label := keys[i]
+			if !m.compare && m.overlay != "inspect-sort" {
+				label = missingMetricLabel(m.run(), label)
+				if slices.Contains(m.metricPins(m.run()), keys[i]) {
+					label = "* " + label
+				}
+			}
 			if m.overlay == "inspect-overlay" {
 				mark := "[ ] "
-				if v := m.inspectionView(); v != nil {
-					for _, k := range v.Overlay {
-						if k == label {
-							mark = "[x] "
-						}
-					}
+				if slices.Contains(m.inspect.OverlayDraft, keys[i]) {
+					mark = "[x] "
 				}
 				label = mark + label
 			}
@@ -1009,17 +1057,7 @@ func (m *model) inspectionMouse(msg tea.Msg) tea.Cmd {
 		}
 	case "metric":
 		if m.overlay == "inspect-overlay" && v != nil {
-			for i, k := range v.Overlay {
-				if k == key {
-					v.Overlay = append(v.Overlay[:i], v.Overlay[i+1:]...)
-					return nil
-				}
-			}
-			if len(v.Overlay) < 4 {
-				v.Overlay = append(v.Overlay, key)
-			} else {
-				m.status = "Overlay supports at most four metrics"
-			}
+			m.toggleMetricOverlay(key)
 			return nil
 		}
 		m.metric = key
@@ -1032,6 +1070,7 @@ func (m *model) inspectionMouse(msg tea.Msg) tea.Cmd {
 			v.MetricScope = 2
 			v.ExpandedChart = true
 			m.filterInspection(v)
+			m.rememberMetricMode(v)
 		}
 		m.overlay = ""
 		m.inspect.Typing = false

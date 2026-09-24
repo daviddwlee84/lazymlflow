@@ -244,6 +244,9 @@ func fields(v any) map[string]any {
 	for i := 0; i < r.NumField(); i++ {
 		tag := strings.Split(t.Field(i).Tag.Get("toml"), ",")[0]
 		if tag != "" && tag != "-" {
+			if r.Field(i).Kind() == reflect.Pointer && r.Field(i).IsNil() {
+				continue
+			}
 			out[tag] = r.Field(i).Interface()
 		}
 	}
@@ -279,8 +282,8 @@ func (c *Config) render() ([]byte, error) {
 	if len(c.original) == 0 {
 		return toml.Marshal(c)
 	}
-	var old Config
-	if err := toml.Unmarshal(c.original, &old); err != nil {
+	old := defaultConfig("")
+	if err := toml.Unmarshal(c.original, old); err != nil {
 		return nil, err
 	}
 	ss, err := sections(c.original)
@@ -298,6 +301,7 @@ func (c *Config) render() ([]byte, error) {
 	var changes []edit
 	var appendix strings.Builder
 	hasTUI := false
+	hasActivity, hasAlerts := false, false
 	targetSections := 0
 	hasDefault := false
 	for _, s := range ss {
@@ -315,6 +319,12 @@ func (c *Config) render() ([]byte, error) {
 			hasTUI = true
 			before = fields(old.TUI)
 			after = fields(c.TUI)
+		case "activity":
+			hasActivity = true
+			before, after = fields(old.Activity), fields(c.Activity)
+		case "alerts":
+			hasAlerts = true
+			before, after = fields(old.Alerts), fields(c.Alerts)
 		case "targets", "targets.env":
 			if s.name == "targets" {
 				targetSections++
@@ -428,6 +438,26 @@ func (c *Config) render() ([]byte, error) {
 		}
 		appendix.Write(b)
 	}
+	if !hasActivity && !reflect.DeepEqual(old.Activity, c.Activity) {
+		b, e := toml.Marshal(struct {
+			Activity core.ActivitySettings `toml:"activity"`
+		}{c.Activity})
+		if e != nil {
+			return nil, e
+		}
+		appendix.WriteByte('\n')
+		appendix.Write(b)
+	}
+	if !hasAlerts && !reflect.DeepEqual(old.Alerts, c.Alerts) {
+		b, e := toml.Marshal(struct {
+			Alerts core.AlertSettings `toml:"alerts"`
+		}{c.Alerts})
+		if e != nil {
+			return nil, e
+		}
+		appendix.WriteByte('\n')
+		appendix.Write(b)
+	}
 	for _, t := range c.Targets {
 		if !oldIDs[t.ID] {
 			b, e := toml.Marshal(struct {
@@ -461,8 +491,8 @@ func (c *Config) render() ([]byte, error) {
 		out.WriteByte('\n')
 		out.WriteString(appendix.String())
 	}
-	var validate Config
-	if err = toml.Unmarshal(out.Bytes(), &validate); err != nil {
+	validate := defaultConfig("")
+	if err = toml.Unmarshal(out.Bytes(), validate); err != nil {
 		return nil, fmt.Errorf("cannot preserve config layout; edit it manually: %w", err)
 	}
 	actual, actualErr := toml.Marshal(validate)

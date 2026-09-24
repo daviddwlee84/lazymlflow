@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"strings"
 )
 
 // ColumnSpec identifies the actual logged field, independently of its label.
@@ -29,7 +31,24 @@ type ExperimentView struct {
 	Expanded   map[string]bool `json:"expanded,omitempty"`
 	Visibility string          `json:"visibility"` // normal, hidden, archived, all
 	Filter     string          `json:"filter,omitempty"`
+	MetricPins []string        `json:"metric_pins,omitempty"` // ordered exact metric keys
+	Activity   *ActivityPolicy `json:"activity,omitempty"`
 }
+
+func ValidateMetricPins(keys []string) error {
+	seen := make(map[string]bool, len(keys))
+	for _, key := range keys {
+		if key == "" || strings.ContainsAny(key, "\x00\r\n") {
+			return fmt.Errorf("metric pins need nonempty keys without control characters")
+		}
+		if seen[key] {
+			return fmt.Errorf("duplicate pinned metric %q", key)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
 type LayoutPreferences struct {
 	LeftRatio            float64 `json:"left_ratio"`
 	TopRatio             float64 `json:"top_ratio"`
@@ -38,7 +57,7 @@ type LayoutPreferences struct {
 }
 
 func DefaultLayout() LayoutPreferences {
-	return LayoutPreferences{LeftRatio: .30, TopRatio: .55, Mouse: true, ExperimentVisibility: "normal"}
+	return LayoutPreferences{LeftRatio: .22, TopRatio: .55, Mouse: true, ExperimentVisibility: "normal"}
 }
 func DefaultView(metrics, params []string) ExperimentView {
 	v := ExperimentView{Columns: []ColumnSpec{{Kind: "attribute", Key: "name", Width: 28}, {Kind: "attribute", Key: "status", Width: 12}, {Kind: "attribute", Key: "start_time", Width: 18}}, Sort: []SortSpec{{Column: ColumnSpec{Kind: "attribute", Key: "start_time"}, Desc: true}}, Mode: "auto", Expansion: "first", Visibility: "normal"}

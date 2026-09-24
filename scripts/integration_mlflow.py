@@ -14,6 +14,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 
 
 def main():
@@ -37,6 +38,7 @@ def main():
         (artifact / "nested" / "weights.bin").write_bytes(b"\x00\x01\x02MLflow\xff")
         (artifact / "專案 é.txt").write_text("hello MLflow\n", encoding="utf-8")
         recorded = {}
+        activity_seeds = {}
         for target, uri in (("sqlite", "sqlite:///" + str(root / "tracking.db")),
                             ("files", (root / "mlruns").as_uri())):
             client = MlflowClient(tracking_uri=uri)
@@ -55,6 +57,19 @@ def main():
                 client.log_artifacts(run_id, str(artifact))
                 client.set_terminated(run_id)
             recorded[target] = (experiment, runs, uri)
+
+            # Keep Activity cases in separate experiments so the existing
+            # two-run filtering/comparison assertions remain unchanged.
+            review = client.create_experiment("activity review", artifact_location=(root / (target + "-review-artifacts")).as_uri())
+            validation = client.create_experiment("activity validation", artifact_location=(root / (target + "-activity-validation")).as_uri())
+            failed = client.create_run(review, tags={"mlflow.runName": "known failure"}).info.run_id
+            client.set_terminated(failed, status="FAILED")
+            nonfinite = client.create_run(validation, tags={"mlflow.runName": "nonfinite validation"}).info.run_id
+            timestamp = int(time.time() * 1000)
+            client.log_metric(nonfinite, "valid_corr", float("nan"), timestamp=timestamp, step=1)
+            best = client.create_run(review, tags={"mlflow.runName": "producer best metric"}).info.run_id
+            client.log_metric(best, "best_corr", .7, timestamp=timestamp, step=1)
+            activity_seeds[target] = (review, failed, nonfinite, best, timestamp)
 
         def call(*arguments, expected=0):
             p = subprocess.run([binary, "--config", str(config), *arguments], env=env,
@@ -88,10 +103,78 @@ def main():
             assert (output / "nested" / "weights.bin").read_bytes() == (artifact / "nested" / "weights.bin").read_bytes()
             call("--target", target, "artifacts", "download", runs[0], "--dest", str(output), "--json", expected=1)
         assert before == hashlib.sha256((root / "tracking.db").read_bytes()).hexdigest(), "read-only SQLite changed"
+
+        for target, (_, baseline_runs, uri) in recorded.items():
+            print(f"MLflow {version}: {target} Activity counts/inbox/alerts/subscriptions", flush=True)
+            review, failed, nonfinite, best, timestamp = activity_seeds[target]
+            client = MlflowClient(tracking_uri=uri)
+            expected_ids = set(baseline_runs + [failed, nonfinite, best])
+
+            def activity_list(view):
+                return call("--target", target, "activity", "list", "--view", view, "--all", "--json")
+
+            def refresh():
+                return call("--target", target, "activity", "refresh", "--json")["activity"]
+
+            def ids(view):
+                return {row["run_id"] for row in activity_list(view)["runs"]}
+
+            snapshot = call("--target", target, "activity", "refresh", "--full", "--json")["activity"]
+            assert snapshot["complete"] and not snapshot["errors"], snapshot
+            assert sum(count["total"] for count in snapshot["counts"].values()) == 6, snapshot["counts"]
+            assert all(count["complete"] for count in snapshot["counts"].values())
+            assert set(snapshot["records"]) == expected_ids
+            assert ids("running") == {nonfinite, best}, "running must span experiments"
+            recent = activity_list("recent")["runs"]
+            assert {row["run_id"] for row in recent} == set(baseline_runs + [failed])
+            assert len({row["experiment_id"] for row in recent}) >= 3
+            assert [row["end_time"] for row in recent] == sorted((row["end_time"] for row in recent), reverse=True)
+
+            call("--target", target, "activity", "read", "--all", "--json")
+            assert not ids("unread")
+            call("--target", target, "activity", "unread", best, "--json")
+            assert ids("unread") == {best}
+            call("--target", target, "activity", "read", best, "--json")
+            rediscovery = call("--target", target, "activity", "unread", "--since", "7d", "--json")
+            assert rediscovery["unread"] == 6 and ids("unread") == expected_ids
+            call("--target", target, "activity", "read", "--all", "--json")
+
+            assert ids("alerts") == {failed, nonfinite}
+            call("--target", target, "activity", "acknowledge", failed, nonfinite, "--json")
+            assert not ids("alerts") and ids("acknowledged") == {failed, nonfinite}
+            assert ids("all") == expected_ids, "acknowledgment removed a run"
+            client.log_metric(nonfinite, "valid_corr", float("nan"), timestamp=timestamp + 1000, step=2)
+            refresh()
+            assert not ids("alerts"), "ongoing NaN samples reopened an acknowledged episode"
+            client.log_metric(nonfinite, "valid_corr", .5, timestamp=timestamp + 2000, step=3)
+            refresh()
+            client.log_metric(nonfinite, "valid_corr", float("nan"), timestamp=timestamp + 3000, step=4)
+            refresh()
+            assert ids("alerts") == {nonfinite}, "a new nonfinite episode did not reappear"
+
+            # best_corr is an exact producer-logged key. Value subscriptions
+            # compare its returned latest scalar, not each logged sample.
+            view = call("--target", target, "view", "set", review,
+                        "--notify-metric", "best_corr=value", "--metric-updates", "false", "--json")["view"]
+            assert view["activity"]["subscriptions"] == [{"key": "best_corr", "mode": "value"}]
+            refresh()  # Establish subscription baseline for this existing run.
+            call("--target", target, "activity", "read", "--all", "--json")
+            client.log_metric(best, "best_corr", .8, timestamp=timestamp + 4000, step=2)
+            refresh()
+            unread = activity_list("unread")["runs"]
+            assert {row["run_id"] for row in unread} == {best}, unread
+            assert "metric:best_corr" in unread[0]["reasons"]
+            call("--target", target, "activity", "read", best, "--json")
+            client.log_metric(best, "best_corr", .8, timestamp=timestamp + 5000, step=3)
+            snapshot = refresh()
+            assert not ids("unread"), "equal-value sample triggered a value subscription"
+            latest = next(metric for metric in snapshot["records"][best]["metrics"] if metric["key"] == "best_corr")
+            assert latest["step"] == 3 and latest["value"] == .8
         missing = root / "missing.db"
         call("--tracking-uri", "sqlite:///" + str(missing), "experiments", "list", "--json", expected=1)
         assert not missing.exists()
-        print(f"PASS real MLflow {version}: both stores, global queries, comparisons, histories, downloads; SQLite unchanged", flush=True)
+        print(f"PASS real MLflow {version}: both stores, queries/comparisons/histories/downloads; read-only SQLite unchanged; "
+              "Activity full counts, cross-experiment recent/running, read/unread windows, FAILED/NaN episodes and exact best-metric subscriptions", flush=True)
 
 
 if __name__ == "__main__":

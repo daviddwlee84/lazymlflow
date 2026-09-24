@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/daviddwlee84/lazymlflow/internal/config"
@@ -174,7 +175,7 @@ func NewRoot(options Options) *cobra.Command {
 		}
 		return a.dashboard(cmd.Context(), cmd.Flags().Changed("mouse"))
 	}
-	root.AddCommand(a.targetsCommand(), a.experimentsCommand(), a.runsCommand(), a.metricsCommand(), a.artifactsCommand(), a.openCommand(), a.configCommand(), a.doctorCommand(), a.viewCommand(), a.datasetsCommand(), a.notesCommand(), a.promptCommand(), a.serverCommand(), a.modelsCommand())
+	root.AddCommand(a.targetsCommand(), a.experimentsCommand(), a.runsCommand(), a.metricsCommand(), a.artifactsCommand(), a.openCommand(), a.configCommand(), a.doctorCommand(), a.viewCommand(), a.activityCommand(), a.datasetsCommand(), a.notesCommand(), a.promptCommand(), a.serverCommand(), a.modelsCommand())
 	root.AddCommand(&cobra.Command{Use: "version", Short: "Print the build version", Args: noArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		if a.jsonOutput {
 			return a.output(cmd, map[string]string{"version": options.Version})
@@ -314,7 +315,20 @@ func (a *app) dashboard(ctx context.Context, mouseExplicit bool) error {
 	if mouseExplicit {
 		mouse = &a.mouse
 	}
-	return a.options.Dashboard(ctx, tui.Options{State: state, Mouse: mouse, Targets: targets, InitialTarget: initial, ConfigPath: cfg.SourcePath(), Connector: m, Input: a.options.In, Output: a.options.Out, MetricColumns: cfg.TUI.MetricColumns, ParameterColumns: cfg.TUI.ParameterColumns, RefreshSeconds: cfg.TUI.RefreshSeconds, SaveTargets: func(targets []core.Target, defaultID string) error {
+	var configMu sync.Mutex
+	return a.options.Dashboard(ctx, tui.Options{State: state, Mouse: mouse, Targets: targets, InitialTarget: initial, ConfigPath: cfg.SourcePath(), Connector: m, Input: a.options.In, Output: a.options.Out, MetricColumns: cfg.TUI.MetricColumns, ParameterColumns: cfg.TUI.ParameterColumns, RefreshSeconds: cfg.TUI.RefreshSeconds, Activity: cfg.Activity, Alerts: cfg.Alerts, SaveActivity: func(settings core.ActivitySettings, alerts core.AlertSettings) error {
+		configMu.Lock()
+		defer configMu.Unlock()
+		previousSettings, previousAlerts := cfg.Activity, cfg.Alerts
+		cfg.Activity, cfg.Alerts = settings, alerts
+		if err := cfg.Save(a.configPath); err != nil {
+			cfg.Activity, cfg.Alerts = previousSettings, previousAlerts
+			return err
+		}
+		return nil
+	}, SaveTargets: func(targets []core.Target, defaultID string) error {
+		configMu.Lock()
+		defer configMu.Unlock()
 		cfg.Targets = nil
 		for _, target := range targets {
 			if !target.Transient {

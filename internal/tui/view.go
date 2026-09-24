@@ -152,7 +152,7 @@ func (m *model) View() tea.View {
 			left, upper := layout.Panes[0].W, layout.Panes[1].H
 			right := w - left
 			exp := frame("1 Experiments", m.experimentLines(left-2, contentHeight-2), left, contentHeight, m.focus == 0)
-			runs := frame("2 Runs", m.runLines(right-2, upper-2), right, upper, m.focus == 1)
+			runs := frame("2 "+activityLabel(m.activityScope()), m.runLines(right-2, upper-2), right, upper, m.focus == 1)
 			detail := frame("3 "+m.detailTitle(), m.detailLines(right-2, contentHeight-upper-2), right, contentHeight-upper, m.focus == 2)
 			content = lipgloss.JoinHorizontal(lipgloss.Top, exp, runs+"\n"+detail)
 		} else {
@@ -160,7 +160,7 @@ func (m *model) View() tea.View {
 			case 0:
 				content = frame("1 Experiments · z zoom / restore", m.experimentLines(w-2, contentHeight-2), w, contentHeight, true)
 			case 1:
-				content = frame("2 Runs", m.runLines(w-2, contentHeight-2), w, contentHeight, true)
+				content = frame("2 "+activityLabel(m.activityScope()), m.runLines(w-2, contentHeight-2), w, contentHeight, true)
 			case 2:
 				content = frame("3 "+m.detailTitle(), m.detailLines(w-2, contentHeight-2), w, contentHeight, true)
 			}
@@ -190,6 +190,9 @@ func (m *model) View() tea.View {
 	return v
 }
 func (m *model) contextLine() string {
+	if m.overlay == "" && m.activityScope() != scopeExperiment {
+		return "● unread · ! active alert · Enter inspect/read · J/K unread · w read · W read all · ! preferences"
+	}
 	if m.overlay != "" {
 		switch m.overlay {
 		case "columns":
@@ -220,6 +223,9 @@ func (m *model) contextLine() string {
 	return "↑↓/jk move · Tab/Shift+Tab focus · ←→/hl context · gg/G first/last · ? help · q quit"
 }
 func (m *model) footer() string {
+	if m.overlay == "" && m.activityScope() != scopeExperiment && m.focus < 2 {
+		return "I activity · J/K unread · Enter inspect/read · w/W read · a acknowledge · r refresh · ! settings · ? help"
+	}
 	if v := m.inspectionFooter(); v != "" {
 		return v
 	}
@@ -236,7 +242,9 @@ func (m *model) footer() string {
 				return "Space select · < > reorder · [ ] width · n numeric · 0 reset · / search · Esc close"
 			case "sort":
 				return "Enter primary sort · Space secondary / direction · Backspace remove · n numeric · 0 reset · Esc close"
-			case "info", "parent-info":
+			case "info":
+				return "↑↓/jk scroll · r rebuild counts · Enter / Esc close"
+			case "parent-info":
 				return "↑↓/jk scroll · Enter / Esc close"
 			default:
 				return "Space / Enter select · / search · Esc close"

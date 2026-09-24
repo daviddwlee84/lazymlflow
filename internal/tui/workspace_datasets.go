@@ -579,6 +579,7 @@ func (m *model) acceptCatalogRun(v catalogRunMsg) tea.Cmd {
 		s.Experiments = append(s.Experiments, v.experiment)
 	}
 	m.closeCatalog()
+	m.leaveActivity()
 	s.Selected = v.run.Info.ExperimentID
 	if s.Selected == "" {
 		s.Selected = v.experiment.ID

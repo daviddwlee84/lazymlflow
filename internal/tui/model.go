@@ -29,6 +29,9 @@ type Options struct {
 	ConfigPath       string
 	State            core.StateStore
 	Mouse            *bool
+	Activity         core.ActivitySettings
+	Alerts           core.AlertSettings
+	SaveActivity     func(core.ActivitySettings, core.AlertSettings) error
 }
 
 func Run(ctx context.Context, opts Options) error {
@@ -105,6 +108,8 @@ type targetState struct {
 }
 
 type model struct {
+	activities                              map[string]*activityState
+	activityTickGen                         uint64
 	extensions                              *extensionState
 	work                                    *workspaceState
 	inspect                                 *inspectionState
@@ -180,7 +185,7 @@ func newTargetState() *targetState {
 	return &targetState{Visibility: map[string]core.Visibility{}, VisibilityTouched: map[string]bool{}, Runs: map[string]*runState{}, Artifacts: map[string]*artifactState{}, Basket: map[string]core.Run{}, Histories: map[string][]core.Metric{}, HistoryErrors: map[string]string{}}
 }
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.connect(), m.tick(), m.inspectionTick(), m.loadLayout(), m.loadVisibility())
+	return tea.Batch(m.connect(), m.tick(), m.inspectionTick(), m.loadLayout(), m.loadVisibility(), m.activityTick())
 }
 func (m *model) tick() tea.Cmd {
 	if m.opts.RefreshSeconds <= 0 {
@@ -202,6 +207,9 @@ func (m *model) target() core.Target {
 	return core.Target{}
 }
 func (m *model) runs() *runState {
+	if a := m.activityCurrent(); a != nil && a.Scope != scopeExperiment {
+		return a.Views[a.Scope]
+	}
 	s := m.state()
 	if s == nil {
 		return nil
@@ -216,8 +224,16 @@ func (m *model) run() *core.Run {
 	}
 	for i := range s.Rows {
 		if s.Rows[i].ID() == s.Selected {
+			if a := m.activityCurrent(); a != nil && a.Scope != scopeExperiment {
+				if full, ok := a.Runs[s.Selected]; ok {
+					return full
+				}
+			}
 			return &s.Rows[i]
 		}
+	}
+	if a := m.activityCurrent(); a != nil && a.Scope != scopeExperiment && a.Inspect != nil && a.Inspect.ID() == s.Selected {
+		return a.Inspect
 	}
 	return nil
 }
@@ -253,6 +269,7 @@ func (m *model) operation(name string) (context.Context, uint64) {
 	return ctx, m.seq
 }
 func (m *model) stopAll() {
+	m.stopActivity()
 	m.stopInspection()
 	m.seq++
 	m.downloadGen = m.seq
@@ -290,6 +307,9 @@ func (m *model) stopAll() {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	defer m.refreshRowCache()
 	defer m.syncInspection()
+	if cmd, handled := m.updateActivity(msg); handled {
+		return m, cmd
+	}
 	if cmd, handled := m.updateExtensions(msg); handled {
 		return m, cmd
 	}
@@ -306,6 +326,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Could not load layout: " + v.err.Error()
 		} else if v.found && v.revision == m.layoutRevision {
 			m.layout = v.value
+			if m.layout.LeftRatio == .30 {
+				m.layout.LeftRatio = .22
+			}
 			m.reselectExperiment()
 			if m.opts.Mouse != nil {
 				m.layout.Mouse = *m.opts.Mouse
@@ -462,14 +485,15 @@ type action struct {
 
 func act(id, keys, label string) action { return action{id, strings.Split(keys, "|"), label} }
 func (m *model) actions() []action {
-	a := append(m.workspaceActions(), m.inspectionActions()...)
+	a := append(m.activityActions(), m.workspaceActions()...)
+	a = append(a, m.inspectionActions()...)
 	a = append(a, act("server-setup", "ctrl+n", "Set up a persistent MLflow server"), act("model-registry", "O", "Browse registered models"), act("target-environment", "E", "Experiment environment"))
 	if m.run() != nil {
 		a = append(a, act("model-related", "C", "Models related to this run"), act("model-source", "ctrl+o", "Inspect a model or artifact URI"))
 	}
 	a = append(a, []action{act("quit", "q", "Quit"), act("help", "?", "Help"), act("palette", ":", "Actions"), act("targets", "t", "Switch target"), act("refresh", "r", "Refresh"), act("up", "up|k", "Move up"), act("down", "down|j", "Move down"), act("first", "home", "First row (also gg)"), act("last", "end|G", "Last row"), act("back", "esc", "Back / cancel"), act("nextpane", "tab", "Next pane"), act("prevpane", "shift+tab", "Previous pane"), act("left", "left|h", "Previous pane / parent / pan left"), act("right", "right|l", "Next pane / enter / pan right"), act("enter", "enter", "Inspect selection")}...)
 	a = append(a, act("pane1", "1", "Focus experiments"), act("pane2", "2", "Focus runs"), act("pane3", "3", "Focus details"), act("zoom", "z", "Zoom / restore pane"), act("resize", "ctrl+w", "Resize panes"), act("mouse", "M", "Toggle mouse capture"), act("layout", "L", "Layout options"))
-	if m.focus == 0 {
+	if m.focus == 0 && m.activityScope() == scopeExperiment {
 		a = append(a, act("info", "i", "Full experiment information"))
 	}
 	if m.compare {
@@ -483,12 +507,15 @@ func (m *model) actions() []action {
 		a = append(a, act("basket", "space", "Select run for comparison"), act("columns", "v", "Choose columns"), act("previous-column", "[", "Previous metric / parameter column"), act("next-column", "]", "Next metric / parameter column"))
 	}
 	if m.focus == 1 {
-		a = append(a, act("group", "b", "Group runs"), act("loadall", "A", "Load all matching runs"), act("parent", "P", "Inspect parent run"))
+		if m.activityScope() == scopeExperiment {
+			a = append(a, act("group", "b", "Group runs"))
+		}
+		a = append(a, act("loadall", "A", "Load all matching runs"), act("parent", "P", "Inspect parent run"))
 	}
 	if m.focus < 2 {
 		a = append(a, act("visibility", "V", "Local visibility filter"))
 	}
-	if (m.focus == 0 && m.state() != nil && m.state().Selected != "") || (m.focus != 0 && m.run() != nil) {
+	if (m.focus == 0 && m.activityScope() == scopeExperiment && m.state() != nil && m.state().Selected != "") || (m.focus != 0 && m.run() != nil) {
 		a = append(a, act("hide", "H", "Hide locally"), act("archive", "X", "Archive locally"), act("restore", "U", "Restore local visibility"))
 	}
 	if r := m.runs(); r != nil && r.LoadingAll {
@@ -497,7 +524,7 @@ func (m *model) actions() []action {
 	if s := m.state(); s != nil && len(s.Basket) > 0 {
 		a = append(a, act("compare", "c", fmt.Sprintf("Compare %d selected runs", len(s.Basket))))
 	}
-	if (m.focus == 0 && m.state() != nil && m.state().Selected != "") || m.run() != nil {
+	if (m.focus == 0 && m.activityScope() == scopeExperiment && m.state() != nil && m.state().Selected != "") || (m.focus != 0 && m.run() != nil) {
 		a = append(a, act("open", "o", "Open MLflow web page"), act("copy", "y", "Copy full ID / artifact path"))
 	}
 	if m.focus == 2 {
@@ -516,6 +543,9 @@ func (m *model) actions() []action {
 }
 
 func (m *model) perform(id string) tea.Cmd {
+	if cmd, ok := m.performActivity(id); ok {
+		return cmd
+	}
 	switch id {
 	case "server-setup":
 		return m.openServerSetup()
@@ -664,7 +694,7 @@ func (m *model) perform(id string) tea.Cmd {
 				return nil
 			}
 			m.focus = 2
-			return m.ensureDetails()
+			return tea.Batch(m.ensureDetails(), m.activityReadSelected(false))
 		}
 		if m.tab == 4 {
 			return m.artifactEnter()
@@ -984,6 +1014,9 @@ func (m *model) move(delta int) tea.Cmd {
 	}
 	switch m.focus {
 	case 0:
+		if m.activityAvailable() {
+			return m.moveActivitySidebar(delta)
+		}
 		if s := m.state(); s != nil {
 			before := s.Selected
 			m.selectExperiment(s.Index + delta)
@@ -994,7 +1027,7 @@ func (m *model) move(delta int) tea.Cmd {
 	case 1:
 		if r := m.runs(); r != nil {
 			m.selectRun(r.Index + delta)
-			return m.ensureDetails()
+			return tea.Batch(m.ensureDetails(), m.activityReadSelected(true))
 		}
 	case 2:
 		if m.tab == 4 {
@@ -1024,6 +1057,9 @@ func (m *model) move(delta int) tea.Cmd {
 	return nil
 }
 func (m *model) ensureDetails() tea.Cmd {
+	if cmd := m.ensureActivityRun(); cmd != nil {
+		return cmd
+	}
 	m.syncInspection()
 	if m.tab != 1 {
 		m.cancelUnusedHistories()

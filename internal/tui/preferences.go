@@ -67,6 +67,8 @@ func cloneView(v core.ExperimentView) core.ExperimentView {
 	v.Columns = append([]core.ColumnSpec(nil), v.Columns...)
 	v.Sort = append([]core.SortSpec(nil), v.Sort...)
 	v.GroupBy = append([]string(nil), v.GroupBy...)
+	v.MetricPins = append([]string(nil), v.MetricPins...)
+	v.Activity = core.CloneActivityPolicy(v.Activity)
 	expanded := map[string]bool{}
 	for k, b := range v.Expanded {
 		expanded[k] = b
@@ -108,6 +110,10 @@ func (m *model) saveEffect() tea.Cmd {
 	}
 }
 func (m *model) saveView() tea.Cmd {
+	if m.activityScope() != scopeExperiment {
+		m.rebuildActivityViews()
+		return nil
+	}
 	r, s := m.runs(), m.state()
 	if r == nil || s == nil {
 		return nil
@@ -144,6 +150,9 @@ func (m *model) loadLayout() tea.Cmd {
 	}
 }
 func (m *model) loadView() tea.Cmd {
+	if m.activityScope() != scopeExperiment {
+		return nil
+	}
 	r, s := m.runs(), m.state()
 	if r == nil || s == nil || r.ViewRequested || m.opts.State == nil {
 		return nil
@@ -200,7 +209,7 @@ func (m *model) acceptView(v viewLoadedMsg) tea.Cmd {
 	} else {
 		r.Order = "attributes.start_time DESC"
 	}
-	if m.active == v.target && s.Selected == v.experiment {
+	if m.active == v.target && s.Selected == v.experiment && m.activityScope() == scopeExperiment {
 		m.reselectRun()
 		return m.loadRuns(false)
 	}

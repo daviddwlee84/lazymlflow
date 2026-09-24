@@ -406,8 +406,8 @@ func TestInspectionMousePickerAndSemanticRows(t *testing.T) {
 	m.syncInspection()
 	key(m, "p")
 	mouseClick(m, 12, 3)
-	if len(m.inspectionView().Overlay) != 1 || m.inspectionView().Overlay[0] != "loss" {
-		t.Fatal("mouse checkbox did not select metric")
+	if len(m.inspect.OverlayDraft) != 1 || m.inspect.OverlayDraft[0] != "loss" || len(m.inspectionView().Overlay) != 0 {
+		t.Fatal("mouse checkbox did not edit the overlay draft")
 	}
 	mouseClick(m, 0, 2)
 	if m.overlay != "inspect-overlay" {

@@ -49,6 +49,10 @@ func (m *model) openSummary() tea.Cmd {
 		}
 		recipe = "compare-runs"
 	} else if m.focus == 0 {
+		if m.activityScope() != scopeExperiment {
+			m.status = "Select an Activity run to summarize"
+			return nil
+		}
 		experiment = s.Selected
 		recipe = "experiment-summary"
 	} else if r := m.run(); r != nil {

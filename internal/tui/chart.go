@@ -105,7 +105,8 @@ func (m *model) desiredHistories() map[string]struct {
 	}
 
 	for _, key := range keys {
-		if key != "" {
+		_, exists := r.Metric(key)
+		if key != "" && exists {
 			out[historyCacheKey(m.historyNamespace(), r.ID(), key)] = struct {
 				Run    core.Run
 				Metric string
@@ -118,9 +119,13 @@ func (m *model) ensureHistories(force bool) tea.Cmd {
 	if m.inspect == nil {
 		return nil
 	}
+	var preferences tea.Cmd
+	if m.tab == 1 && !m.compare {
+		preferences = m.loadMetricPreferences()
+	}
 	s := m.state()
 	if s == nil || s.Session == nil {
-		return nil
+		return preferences
 	}
 	desired := m.desiredHistories()
 	for key, e := range m.inspect.Histories {
@@ -132,7 +137,7 @@ func (m *model) ensureHistories(force bool) tea.Cmd {
 			e.Pending = false
 		}
 	}
-	var cmds []tea.Cmd
+	cmds := []tea.Cmd{preferences}
 	for key, wanted := range desired {
 		e := m.inspect.Histories[key]
 		if e == nil {
@@ -318,6 +323,7 @@ func (m *model) acceptInspectionRuns(v inspectionRunsMsg) tea.Cmd {
 	}
 	s := m.state()
 	running := false
+	m.rememberActivityMetadata(v.Runs)
 	for _, r := range v.Runs {
 		for cacheKey, e := range m.inspect.Histories {
 			if e.Run == r.ID() && strings.HasPrefix(cacheKey, m.historyNamespace()+"\x00") {
@@ -342,6 +348,15 @@ func (m *model) acceptInspectionRuns(v inspectionRunsMsg) tea.Cmd {
 		}
 		if _, ok := s.Basket[r.ID()]; ok {
 			s.Basket[r.ID()] = r
+		}
+		if activity := m.activityCurrent(); activity != nil {
+			if _, exists := activity.Runs[r.ID()]; exists || activity.Scope != scopeExperiment {
+				updated := r
+				activity.Runs[r.ID()] = &updated
+				if activity.Inspect != nil && activity.Inspect.ID() == r.ID() {
+					activity.Inspect = &updated
+				}
+			}
 		}
 	}
 	if view := m.inspectionView(); view != nil {
@@ -378,6 +393,9 @@ func (m *model) chartEntries(v *inspectionView) []*historyEntry {
 		keys = v.Overlay
 	}
 	for _, key := range keys {
+		if _, exists := r.Metric(key); !exists {
+			continue
+		}
 		if e := m.historyEntryFor(r.ID(), key); e != nil {
 			entries = append(entries, e)
 		}
@@ -418,7 +436,14 @@ func (m *model) metricContent(v *inspectionView, w, h int) paneContent {
 	start := listStart(v.Index, len(v.Rows), capacity)
 	for i := start; i < min(len(v.Rows), start+capacity); i++ {
 		x := v.Rows[i]
-		line := textFit(x.Key, keyW-2) + textFit(x.Value, valueW)
+		label := x.Key
+		for _, pin := range m.metricPins(v.Run) {
+			if pin == x.Key {
+				label = "* " + label
+				break
+			}
+		}
+		line := textFit(label, keyW-2) + textFit(x.Value, valueW)
 		if w >= 48 && x.Metric != nil {
 			line += textFit(strconv.FormatInt(x.Metric.Step, 10), 9)
 		}
@@ -498,6 +523,22 @@ func (m *model) curveContent(v *inspectionView, entries []*historyEntry, w, h in
 		title = "Shared Y axis"
 	}
 	p.add(clean(title) + " · " + axis)
+	if !m.compare && expanded && v != nil && v.Run != nil && len(v.Overlay) > 0 {
+		var missing []string
+		for _, key := range v.Overlay {
+			if _, exists := v.Run.Metric(key); !exists {
+				missing = append(missing, key)
+			}
+		}
+		if len(missing) == len(v.Overlay) {
+			p.add("Selected metrics not logged for this run yet.")
+			p.add(clean(strings.Join(missing, ", ")))
+			return p
+		}
+		if len(missing) > 0 {
+			p.add("Not logged yet: " + clean(strings.Join(missing, ", ")))
+		}
+	}
 	var series []curveSeries
 	for _, e := range entries {
 		points := e.StepPoints
@@ -532,6 +573,12 @@ func (m *model) curveContent(v *inspectionView, entries []*historyEntry, w, h in
 		}
 	}
 	if len(entries) == 0 {
+		if !m.compare && v != nil && v.Run != nil {
+			if _, exists := v.Run.Metric(v.Selected); !exists {
+				p.add("Selected metric not logged for this run yet.")
+				return p
+			}
+		}
 		p.add("Loading history…")
 		return p
 	}

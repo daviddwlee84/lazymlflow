@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/daviddwlee84/lazymlflow/internal/config"
@@ -123,11 +124,13 @@ func (a *app) viewCommand() *cobra.Command {
 }
 func (a *app) viewSetCommand() *cobra.Command {
 	var columns, sorts, groups, numeric []string
+	var metricPins, subscriptions []string
 	var mode, expansion, visibility, filter string
+	var metricUpdates, readOn string
 	cmd := &cobra.Command{Use: "set EXPERIMENT_ID", Short: "Save columns, ordering and presentation for one experiment", Args: exactArgs(1), Example: `  lazymlflow view set 11 --column attribute:name --column dataset:name --column 'param:learning rate' --column metric:loss --sort 'metric:loss ASC'
   lazymlflow view set 11 --group-by optimizer --group-by 'learning rate' --mode grouped`, RunE: func(cmd *cobra.Command, args []string) error {
 		changed := false
-		for _, name := range []string{"column", "sort", "group-by", "numeric", "mode", "expansion", "visibility", "filter"} {
+		for _, name := range []string{"column", "sort", "group-by", "numeric", "mode", "expansion", "visibility", "filter", "metric-pin", "notify-metric", "metric-updates", "read-on"} {
 			changed = changed || cmd.Flags().Changed(name)
 		}
 		if !changed {
@@ -137,6 +140,21 @@ func (a *app) viewSetCommand() *cobra.Command {
 		parsedColumns, err := parseColumns(columns)
 		if err != nil {
 			return err
+		}
+		pins := nonemptyStrings(metricPins)
+		if err := core.ValidateMetricPins(pins); err != nil {
+			return usageError{err}
+		}
+		subs, err := parseMetricSubscriptions(subscriptions)
+		if err != nil {
+			return err
+		}
+		updates, err := parseInheritedBool(metricUpdates)
+		if err != nil {
+			return usagef("--metric-updates: %v", err)
+		}
+		if readOn != "" && readOn != "open" && readOn != "select" && readOn != "inherit" {
+			return usagef("--read-on must be open, select, or inherit")
 		}
 		parsedSort := make([]core.SortSpec, 0, len(sorts))
 		for _, raw := range sorts {
@@ -226,6 +244,26 @@ func (a *app) viewSetCommand() *cobra.Command {
 		if cmd.Flags().Changed("filter") {
 			v.Filter = filter
 		}
+		if cmd.Flags().Changed("metric-pin") {
+			v.MetricPins = pins
+		}
+		if cmd.Flags().Changed("notify-metric") || cmd.Flags().Changed("metric-updates") || cmd.Flags().Changed("read-on") {
+			if v.Activity == nil {
+				v.Activity = &core.ActivityPolicy{}
+			}
+			if cmd.Flags().Changed("notify-metric") {
+				v.Activity.Subscriptions = subs
+			}
+			if cmd.Flags().Changed("metric-updates") {
+				v.Activity.MetricUpdates = updates
+			}
+			if cmd.Flags().Changed("read-on") {
+				v.Activity.ReadOn = readOn
+				if readOn == "inherit" {
+					v.Activity.ReadOn = ""
+				}
+			}
+		}
 		if err := core.ValidateView(v); err != nil {
 			return usageError{err}
 		}
@@ -243,7 +281,50 @@ func (a *app) viewSetCommand() *cobra.Command {
 	cmd.Flags().StringVar(&expansion, "expansion", "", "Initial expansion: collapsed, first, all")
 	cmd.Flags().StringVar(&visibility, "visibility", "", "Local visibility: normal, hidden, archived, all")
 	cmd.Flags().StringVar(&filter, "filter", "", "Saved MLflow server filter (empty clears)")
+	cmd.Flags().StringArrayVar(&metricPins, "metric-pin", nil, "Replace ordered exact metric pins; repeat; empty clears")
+	cmd.Flags().StringArrayVar(&subscriptions, "notify-metric", nil, "Replace subscriptions: exact KEY or KEY=value|sample; repeat; empty clears")
+	cmd.Flags().StringVar(&metricUpdates, "metric-updates", "inherit", "Notify on any metric sample update: true, false, inherit")
+	cmd.Flags().StringVar(&readOn, "read-on", "inherit", "Mark a run read on open, select, or inherit the global setting")
 	return cmd
+}
+
+func nonemptyStrings(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
+}
+
+func parseInheritedBool(value string) (*bool, error) {
+	if value == "" || value == "inherit" {
+		return nil, nil
+	}
+	if value != "true" && value != "false" {
+		return nil, fmt.Errorf("must be true, false, or inherit")
+	}
+	v, err := strconv.ParseBool(value)
+	return &v, err
+}
+
+func parseMetricSubscriptions(values []string) ([]core.MetricSubscription, error) {
+	result := make([]core.MetricSubscription, 0, len(values))
+	for _, value := range values {
+		if value == "" {
+			continue
+		}
+		key, mode := value, "value"
+		if i := strings.LastIndexByte(value, '='); i >= 0 {
+			key, mode = value[:i], value[i+1:]
+		}
+		result = append(result, core.MetricSubscription{Key: key, Mode: mode})
+	}
+	if err := core.ValidateActivityPolicy(core.ActivityPolicy{Subscriptions: result}); err != nil {
+		return nil, usageError{err}
+	}
+	return result, nil
 }
 func parseColumns(values []string) ([]core.ColumnSpec, error) {
 	result := make([]core.ColumnSpec, 0, len(values))

@@ -62,7 +62,7 @@ func TestNotesMigrateV1AndPreservePreferences(t *testing.T) {
 		t.Fatalf("%+v %v", visibility, err)
 	}
 	var version int
-	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != 2 {
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != schemaVersion {
 		t.Fatalf("version %d %v", version, err)
 	}
 }

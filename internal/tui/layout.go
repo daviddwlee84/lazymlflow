@@ -35,6 +35,9 @@ func calculateLayout(w, h, focus int, zoom, input bool, p core.LayoutPreferences
 		return l
 	}
 	left := clamp(int(float64(w)*p.LeftRatio), 18, w-28)
+	if p.LeftRatio == .22 {
+		left = clamp(left, 20, 36)
+	}
 	top := clamp(int(float64(height)*p.TopRatio), 6, height-4)
 	l.Split = true
 	l.Panes = [3]rect{{0, 1, left, height}, {left, 1, w - left, top}, {left, 1 + top, w - left, height - top}}
@@ -77,7 +80,7 @@ func (m *model) resizeKey(key string) tea.Cmd {
 	case "j", "down":
 		m.layout.TopRatio += .025
 	case "0":
-		m.layout.LeftRatio = .30
+		m.layout.LeftRatio = .22
 		m.layout.TopRatio = .55
 	}
 	m.layout.LeftRatio = max(.18, min(.75, m.layout.LeftRatio))
@@ -86,7 +89,7 @@ func (m *model) resizeKey(key string) tea.Cmd {
 	return nil
 }
 func (m *model) mouseScope() string {
-	return fmt.Sprintf("%s/%s/%s/%s/%d/%d/%d/%t", m.active, m.selectedExperiment()+"/"+m.selectedRowID(), m.overlay, m.inputMode, m.width, m.height, m.layoutRevision, m.zoom)
+	return fmt.Sprintf("%s/%s/%s/%s/%d/%d/%d/%t", m.active, string(m.activityScope())+"/"+m.selectedExperiment()+"/"+m.selectedRowID(), m.overlay, m.inputMode, m.width, m.height, m.layoutRevision, m.zoom)
 }
 func (m *model) selectedRowID() string {
 	if r := m.runs(); r != nil {
@@ -307,6 +310,9 @@ func (m *model) activateHit(id string) tea.Cmd {
 	}
 	kind, key, _ := strings.Cut(id, ":")
 	switch kind {
+	case "activity":
+		m.focus = 0
+		return m.openActivity(runListScope(key), false)
 	case "action":
 		if key == "columns" || key == "sort" || key == "group" {
 			m.focus = 1
@@ -322,6 +328,7 @@ func (m *model) activateHit(id string) tea.Cmd {
 	case "experiment":
 		for i, e := range m.experimentsVisible() {
 			if e.ID == key {
+				m.leaveActivity()
 				m.focus = 0
 				m.selectExperiment(i)
 				return m.loadRuns(false)
@@ -332,7 +339,7 @@ func (m *model) activateHit(id string) tea.Cmd {
 			if r.ID == key {
 				m.focus = 1
 				m.selectRun(i)
-				return m.ensureDetails()
+				return tea.Batch(m.ensureDetails(), m.activityReadSelected(true))
 			}
 		}
 	case "expand":

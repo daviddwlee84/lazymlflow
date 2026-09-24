@@ -280,6 +280,9 @@ local visibility choices persist across launches.
 | `M` | Toggle mouse capture (`--mouse=false` disables it at launch) |
 | `h l` | Change pane, or parent/enter in artifacts |
 | `t` | Target picker; `a` add and `e` edit inside picker |
+| `I` / `J` / `K` | Activity inbox / next unread / previous unread |
+| `w` / `W` | Mark selected run / entire target inbox read |
+| `!` | Activity, alert and experiment notification preferences |
 | Ctrl+N / `t`, then `s` | Set up a persistent MLflow server |
 | `E` / `O` / `C` | Target environment / registered models / selected run's models |
 | `/` | Search already loaded rows; Enter accepts, Esc clears |
@@ -318,6 +321,80 @@ values returned by MLflow, not the best historical value. Missing metrics are
 `—`; NaN/infinities stay distinct. History retains repeated steps and plots by
 step or elapsed time. Display sampling does not change the underlying metric
 values. A selected metric's direction is never assumed to mean better/worse.
+
+## Activity, unread runs and alerts
+
+Running, Recent, Unread and Alerts stay pinned above the experiment list. They
+cover all accessible active experiments in the current target, independently of
+the experiment list's search and pagination. Running sorts by start time; Recent
+includes finished, failed and killed runs sorted by end time. Recent starts with
+100 rows; `n` loads more and `A` loads all once. Subsequent background polls stay
+bounded to current activity rather than repeating that historical query.
+
+The compact sidebar uses about 22% of the terminal, capped at 36 cells until
+manually resized. Long names use middle truncation; `i` shows the complete name
+and all-history status counts. `R`/`U`/`!` badges indicate running, unread and
+active alerts. Counts include locally hidden runs; visibility filters control
+the Activity lists. Acknowledging a failed run does not change its FAILED count.
+
+The first scan marks runs started or ended in the last seven days, and all
+currently running runs, unread. Later scans retain unread entries until read,
+including across restarts. Moving the cursor previews a run; Enter inspects it
+and marks the observed version read. `w` marks one read, `W` marks the entire
+target inbox read, and `J`/`K` navigate unread runs across experiments. Choose
+`read_on = "select"` globally or per experiment to read on selection instead.
+
+By default, new runs, status changes and new alert episodes cause unread.
+General model-metric notifications are optional and exclude `system/` metrics.
+Use `!` to set per-experiment exact-key subscriptions: `value` compares only the
+logged value; `sample` also compares step and timestamp. For example, subscribe
+to the producer-maintained `best_valid_corr` in value mode. Subscriptions start
+from a baseline, tolerate missing metrics, and never download background history
+or infer whether a metric should increase or decrease.
+
+Alerts flag FAILED and latest NaN/positive or negative infinity returned by
+MLflow. Old historical alerts are indexed too, without making all old runs
+unread. In an Activity run list, `a` acknowledges current alert episodes; `!`
+offers batch acknowledgement, restore and Active/Acknowledged/All views. Reading
+does not acknowledge. Continued NaN samples stay in one episode; observed
+recovery followed by recurrence, or another offending metric, creates a new one.
+Missing metrics and failed requests do not count as recovery.
+
+```toml
+[activity]
+refresh_seconds = 30              # 0 pauses background activity polling
+initial_unread_days = 7
+read_on = "open"                  # or "select"
+metric_updates = false
+
+[alerts]
+failed = true
+non_finite = true
+include_system = true
+# Exact metric keys; omitted include_metrics means every metric.
+exclude_metrics = ["expected_nan_metric"]
+```
+
+```sh
+lazymlflow activity list --view running --refresh --json
+lazymlflow activity list --view recent --limit 100
+lazymlflow activity refresh --full
+lazymlflow activity read --all
+lazymlflow activity unread --since 7d
+lazymlflow activity acknowledge RUN_ID
+lazymlflow activity acknowledge RUN_ID --restore
+lazymlflow view set 11 --notify-metric best_valid_corr=value --read-on open
+lazymlflow view set 11 --metric-pin train_corr --metric-pin valid_corr
+```
+
+Activity lists read local snapshots unless `--refresh` is requested. All-history
+indexing runs once in the background, with at most two experiment scans at a
+time; `Ctrl+X` cancels. Later polls discover experiments and current/new runs,
+updating a compact status index. `i`, then `r`, rebuilds one experiment;
+`activity refresh --full` reconciles the target. Cached counts show their scan
+time and partial/error state. Old completed-run edits, backdated imports and
+deletions need reconciliation; latest-value polling cannot reconstruct changes
+that occur entirely between observations. All writes are local to lazymlflow.
 
 ## Columns, sorting and grouping
 
@@ -359,9 +436,12 @@ Personal state is separate from every MLflow backend:
 `$XDG_DATA_HOME/lazymlflow/state.db`, falling back to
 `~/.local/share/lazymlflow/state.db`. It uses pure-Go SQLite (no CGo/Python),
 transactional versioned setup and bounded lock waits. It contains preferences
-and visibility entries plus local journal notes, not a replica of runs, metrics or
-credentials. Local schema version 2 adds notes transactionally while preserving
-version-1 views and visibility; it does not change any MLflow database.
+and visibility entries, local journal notes and Activity receipts/subscriptions.
+Schema version 3 adds compact observed activity and a separately rebuildable run
+status/count index, preserving earlier views, visibility and notes. Clearing
+that index does not clear read/acknowledge state or notification baselines.
+Full histories, artifacts and credentials are not replicated, and no MLflow
+database is changed.
 
 Hidden/archived items are excluded from the normal view; `V` shows hidden,
 archived or all items and `U` restores them. These actions never modify MLflow
@@ -406,6 +486,16 @@ interval. Completed runs receive one final refresh; automatic mode stays enabled
 and resumes when another running run is selected.
 Background history loading is bounded, cancelable and isolated by source/run/key;
 a failed refresh retains the prior usable history with its error.
+
+Overlay choices and table/dashboard/curve mode follow the experiment for the
+current session, including when entered from Activity. A missing selected metric
+is skipped without removing its selection; it joins the overlay when a refresh
+finds it. With every selected metric missing, the view says they are not logged
+yet instead of showing an endless loading state. The overlay picker uses Enter
+to apply and Esc to cancel, with at most four selected keys including missing
+ones. `*` pins a metric, and `<`/`>` reorders pinned metrics. Pins lead the table,
+dashboard and pickers and persist per experiment; overlay choices reset on
+restart. Pins and update subscriptions are independent.
 
 The Datasets tab shows every logged input. `{` / `}` changes input, `/` searches
 features, Space expands nested fields, Enter opens complete field details, and

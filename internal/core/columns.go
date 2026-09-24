@@ -180,6 +180,14 @@ func NormalizeView(v ExperimentView) ExperimentView {
 	return v
 }
 func ValidateView(v ExperimentView) error {
+	if err := ValidateMetricPins(v.MetricPins); err != nil {
+		return err
+	}
+	if v.Activity != nil {
+		if err := ValidateActivityPolicy(*v.Activity); err != nil {
+			return err
+		}
+	}
 	for _, c := range v.Columns {
 		if err := validateColumn(c); err != nil {
 			return err

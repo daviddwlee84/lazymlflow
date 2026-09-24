@@ -18,7 +18,7 @@ type pickerItem struct {
 func columnID(c core.ColumnSpec) string { return c.Kind + "/" + c.Key + "/" + c.DatasetContext }
 func (m *model) isPicker() bool {
 	switch m.overlay {
-	case "columns", "sort", "group", "layout", "visibility", "info", "parent-info":
+	case "columns", "sort", "group", "layout", "visibility", "info", "parent-info", "activity-settings", "activity-subscriptions":
 		return true
 	}
 	return false
@@ -47,6 +47,8 @@ func (m *model) pickerItems() []pickerItem {
 	var items []pickerItem
 	r := m.runs()
 	switch m.overlay {
+	case "activity-settings", "activity-subscriptions":
+		items = m.activityPickerItems()
 	case "columns", "sort":
 		if r == nil {
 			return nil
@@ -127,7 +129,7 @@ func (m *model) pickerItems() []pickerItem {
 			items = append(items, pickerItem{ID: "param/" + k, Label: mark + "Parameter / " + k})
 		}
 	case "layout":
-		items = []pickerItem{{ID: "resize", Label: "Resize panes with Ctrl+W, then h/l/k/j"}, {ID: "reset", Label: "Reset proportions to 30% left / 55% top"}, {ID: "zoom", Label: "Zoom / restore focused pane (z)"}, {ID: "mouse", Label: fmt.Sprintf("Mouse capture: %t (M to toggle)", m.layout.Mouse)}}
+		items = []pickerItem{{ID: "resize", Label: "Resize panes with Ctrl+W, then h/l/k/j"}, {ID: "reset", Label: "Reset sidebar to compact automatic width / 55% top"}, {ID: "zoom", Label: "Zoom / restore focused pane (z)"}, {ID: "mouse", Label: fmt.Sprintf("Mouse capture: %t (M to toggle)", m.layout.Mouse)}}
 	case "visibility":
 		want := m.layout.ExperimentVisibility
 		if m.focus != 0 && r != nil {
@@ -163,6 +165,10 @@ func (m *model) handlePicker(msg tea.Msg, key string) tea.Cmd {
 	}
 	if m.overlay == "info" || m.overlay == "parent-info" {
 		switch key {
+		case "r":
+			if m.overlay == "info" {
+				return m.refreshActivity(true, []string{m.selectedExperiment()})
+			}
 		case "q", "enter":
 			m.overlay = ""
 		case "up", "k":
@@ -227,6 +233,8 @@ func (m *model) choosePicker(key string) tea.Cmd {
 	}
 	item := items[clamp(m.menuIndex, 0, len(items)-1)]
 	switch m.overlay {
+	case "activity-settings", "activity-subscriptions":
+		return m.chooseActivityPicker(item.ID, key)
 	case "columns":
 		if r == nil {
 			return nil
@@ -347,7 +355,7 @@ func (m *model) choosePicker(key string) tea.Cmd {
 		m.overlay = ""
 		switch item.ID {
 		case "reset":
-			m.layout.LeftRatio = .30
+			m.layout.LeftRatio = .22
 			m.layout.TopRatio = .55
 			return m.saveLayout()
 		default:
@@ -442,6 +450,7 @@ func (m *model) pickerView(w, h int) string {
 					break
 				}
 			}
+			lines = append(lines, m.experimentActivityOverview(s.Selected)...)
 		}
 		var wrapped []string
 		for _, line := range lines {
@@ -451,7 +460,7 @@ func (m *model) pickerView(w, h int) string {
 		return frame(title, wrapped[start:], w, h, true)
 	}
 	items := m.pickerItems()
-	title := map[string]string{"columns": "Columns", "sort": "Sort order", "group": "Group by / nested runs", "layout": "Layout", "visibility": "Local visibility"}[m.overlay]
+	title := map[string]string{"columns": "Columns", "sort": "Sort order", "group": "Group by / nested runs", "layout": "Layout", "visibility": "Local visibility", "activity-settings": "Activity / alert preferences", "activity-subscriptions": "Metric subscriptions · Space cycles off / value / sample"}[m.overlay]
 	if m.overlay == "columns" {
 		title += fmt.Sprintf(" · %d selected", len(m.viewColumns()))
 	}

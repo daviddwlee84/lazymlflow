@@ -108,6 +108,9 @@ func (m *model) currentSubject() (core.Subject, bool) {
 		return core.Subject{}, false
 	}
 	if m.focus == 0 {
+		if m.activityScope() != scopeExperiment {
+			return core.Subject{}, false
+		}
 		if s := m.state(); s != nil && s.Selected != "" {
 			label := s.Selected
 			for _, e := range s.Experiments {

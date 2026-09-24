@@ -120,9 +120,15 @@ func (m *model) acceptConnected(v connectedMsg) tea.Cmd {
 	s.Session = v.session
 	s.Retiring = nil
 	s.ConnectErr = ""
-	return tea.Batch(m.loadExperiments(false), m.loadVisibility())
+	return tea.Batch(m.loadExperiments(false), m.loadVisibility(), m.loadActivity())
 }
 func (m *model) refresh() tea.Cmd {
+	if m.activityScope() != scopeExperiment && m.focus < 2 {
+		return m.refreshActivity(false, nil)
+	}
+	if m.activityScope() != scopeExperiment && m.focus == 2 && m.tab != 1 && m.tab != 4 {
+		return m.loadActivityRun(true)
+	}
 	if m.inspect != nil && ((m.focus == 2 && m.tab == 1 && m.run() != nil) || (m.compare && m.chart)) {
 		return m.refreshInspection()
 	}
@@ -208,6 +214,9 @@ func (m *model) acceptExperiments(v experimentsMsg) tea.Cmd {
 	return tea.Batch(m.loadRuns(false), m.loadView())
 }
 func (m *model) loadRuns(more bool) tea.Cmd {
+	if m.activityScope() != scopeExperiment {
+		return m.loadActivityRows(more)
+	}
 	s, r := m.state(), m.runs()
 	if s == nil || s.Session == nil || s.Selected == "" || r == nil {
 		return nil
@@ -273,6 +282,7 @@ func (m *model) acceptRuns(v runsMsg) tea.Cmd {
 		return nil
 	}
 	r.RowsVersion++
+	m.rememberActivityMetadata(v.page.Runs)
 	selected, index := r.Selected, r.Index
 	if v.append {
 		seen := map[string]bool{}

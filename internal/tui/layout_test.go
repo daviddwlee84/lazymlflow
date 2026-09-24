@@ -45,7 +45,7 @@ func TestPaneShortcutsResizeAndInputOwnership(t *testing.T) {
 	key(m, "l")
 	key(m, "k")
 	key(m, "enter")
-	if m.resizing || m.layout.LeftRatio <= .30 || m.layout.TopRatio >= .55 {
+	if m.resizing || m.layout.LeftRatio <= core.DefaultLayout().LeftRatio || m.layout.TopRatio >= .55 {
 		t.Fatal("resize bindings failed")
 	}
 	m.focus = 1
