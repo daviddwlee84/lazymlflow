@@ -35,6 +35,10 @@ jobs:
       - run: go build -o bin/lazymlflow ./cmd/lazymlflow
       - run: python3 scripts/pty_smoke.py --binary ./bin/lazymlflow
       - run: python3 scripts/pty_inspection.py --binary ./bin/lazymlflow
+      - run: python3 scripts/pty_activity.py --binary ./bin/lazymlflow
+      - run: python3 scripts/pty_retention.py --binary ./bin/lazymlflow
+      - run: python3 scripts/pty_charts.py --binary ./bin/lazymlflow
+      - run: python3 scripts/pty_preview.py --binary ./bin/lazymlflow
       - if: hashFiles('scripts/pty_setup_models.py') != ''
         run: python3 scripts/pty_setup_models.py --binary ./bin/lazymlflow
   mlflow:

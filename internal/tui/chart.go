@@ -19,8 +19,19 @@ type curvePoint struct {
 	Gap  bool
 }
 type curveSeries struct {
-	Name   string
-	Points []curvePoint
+	Name    string
+	Points  []curvePoint
+	Raw     []curvePoint
+	Markers []curveMarker
+	Slot    int // one-based stable overlay slot; zero uses series position
+}
+type curveMarker struct {
+	Point curvePoint
+	Glyph rune
+}
+type curveRenderOptions struct {
+	Draw      string
+	Normalize bool
 }
 type historyEntry struct {
 	Target, Run, Metric    string
@@ -37,6 +48,13 @@ type historyEntry struct {
 	StepPoints, TimePoints []curvePoint
 	Summary                core.MetricSummary
 	Cancel                 context.CancelFunc
+	Revision               uint64
+	Extrema                chartExtrema
+	Derived                *chartDerived
+	TransformKey           string
+	TransformTicket        uint64
+	TransformPending       bool
+	TransformCancel        context.CancelFunc
 }
 type metricLoadedMsg struct {
 	Target, Key   string
@@ -46,6 +64,7 @@ type metricLoadedMsg struct {
 	TimeOrder     []int
 	Step, Elapsed []curvePoint
 	Summary       core.MetricSummary
+	Extrema       chartExtrema
 	Err           error
 }
 
@@ -184,10 +203,11 @@ func (m *model) ensureHistories(force bool) tea.Cmd {
 			sort.SliceStable(order, func(i, j int) bool { return ordered[order[i]].Timestamp < ordered[order[j]].Timestamp })
 			elapsed := prepareSampledCurve(ordered, sample, order, run.Info.StartTime, true)
 			size += len(elapsed) * 24
-			return metricLoadedMsg{Target: target, Key: key, Gen: gen, Bytes: size, History: ordered, TimeOrder: order, Step: step, Elapsed: elapsed, Summary: summary}
+			return metricLoadedMsg{Target: target, Key: key, Gen: gen, Bytes: size, History: ordered, TimeOrder: order, Step: step, Elapsed: elapsed, Summary: summary, Extrema: deriveExtrema(ordered, summary)}
 		})
 	}
 	m.evictHistories(desired)
+	cmds = append(cmds, m.ensureChartTransforms())
 	return tea.Batch(cmds...)
 }
 func prepareCurve(samples []core.Metric, start int64, elapsed bool) []curvePoint {
@@ -227,6 +247,8 @@ func (m *model) acceptMetric(v metricLoadedMsg) tea.Cmd {
 	e.StepPoints = v.Step
 	e.TimePoints = v.Elapsed
 	e.Summary = v.Summary
+	e.Extrema = v.Extrema
+	e.Revision++
 	e.Updated = time.Now()
 	m.evictHistories(m.desiredHistories())
 	return m.ensureHistories(false)
@@ -244,8 +266,11 @@ func (m *model) evictHistories(active map[string]struct {
 	total := 0
 	for k, e := range m.inspect.Histories {
 		size := max(e.Bytes, len(e.History)*144+len(e.TimeOrder)*8+(len(e.StepPoints)+len(e.TimePoints))*24)
+		if e.Derived != nil {
+			size += e.Derived.Bytes
+		}
 		total += size
-		if _, ok := active[k]; !ok && !e.Pending {
+		if _, ok := active[k]; !ok && !e.Pending && !e.TransformPending {
 			inactive = append(inactive, item{k, e.Used, size})
 		}
 	}
@@ -267,6 +292,11 @@ func (m *model) stopInspection() {
 	m.inspect.RunGen++
 	m.inspect.RunPending = false
 	for _, e := range m.inspect.Histories {
+		if e.TransformCancel != nil {
+			e.TransformCancel()
+		}
+		e.TransformTicket++
+		e.TransformPending = false
 		if e.Cancel != nil {
 			e.Cancel()
 		}
@@ -504,6 +534,7 @@ func (m *model) dashboardContent(v *inspectionView, w, h int) paneContent {
 	return p
 }
 func (m *model) curveContent(v *inspectionView, entries []*historyEntry, w, h int, expanded bool) paneContent {
+	profile := m.currentChartProfile()
 	if m.compare {
 		v = &inspectionView{Selected: m.metric, Cursor: m.inspect.CompareCursor}
 	}
@@ -522,7 +553,33 @@ func (m *model) curveContent(v *inspectionView, entries []*historyEntry, w, h in
 	if len(entries) > 1 {
 		title = "Shared Y axis"
 	}
-	p.add(clean(title) + " · " + axis)
+	mode := profile.draw()
+	if profile.Smooth {
+		mode += fmt.Sprintf(" · EMA %d samples", profile.span())
+	}
+	if profile.Normalize {
+		mode += " · per-series 0–1"
+	}
+	p.add(clean(title) + " · " + axis + " · " + mode)
+	if expanded {
+		legend := "Digits = raw logged samples · lines connect plotted samples"
+		if profile.Smooth {
+			legend = "Digits = raw logged samples · line = EMA"
+		}
+		if profile.draw() == "points" {
+			legend = "Raw logged points only; display may be sampled"
+		}
+		if profile.draw() == "lines" {
+			legend = "Connecting line only; cursor values remain raw"
+			if profile.Smooth {
+				legend = "EMA line only; cursor values remain raw"
+			}
+		}
+		if profile.Extrema {
+			legend += " · v min / ^ max / * both"
+		}
+		p.add(legend)
+	}
 	if !m.compare && expanded && v != nil && v.Run != nil && len(v.Overlay) > 0 {
 		var missing []string
 		for _, key := range v.Overlay {
@@ -540,16 +597,57 @@ func (m *model) curveContent(v *inspectionView, entries []*historyEntry, w, h in
 		}
 	}
 	var series []curveSeries
-	for _, e := range entries {
+	preparing, ready := false, false
+	for i, e := range entries {
 		points := e.StepPoints
+		raw := e.StepPoints
 		if m.elapsed {
 			points = e.TimePoints
+			raw = e.TimePoints
 		}
+		if profile.Smooth || profile.Normalize {
+			if d := e.Derived; d != nil && d.Key == chartTransformKey(e.Revision, profile) {
+				points, raw = d.Step, d.RawStep
+				if m.elapsed {
+					points, raw = d.Time, d.RawTime
+				}
+			} else {
+				points, raw = nil, nil
+				preparing = true
+			}
+		}
+		ready = ready || len(points) > 0 || len(raw) > 0
 		name := e.Metric
 		if m.compare {
 			name = shortID(e.Run) + " " + name
 		}
-		series = append(series, curveSeries{name, points})
+		slot := i + 1
+		if !m.compare && v != nil && len(v.Overlay) > 0 {
+			for index, key := range v.Overlay {
+				if key == e.Metric {
+					slot = index + 1
+					break
+				}
+			}
+		}
+		entry := curveSeries{Name: name, Points: points, Raw: raw, Slot: slot}
+		if profile.Extrema {
+			for index, metric := range []*core.Metric{e.Summary.Min, e.Summary.Max} {
+				if metric == nil {
+					continue
+				}
+				x := float64(metric.Step)
+				if m.elapsed {
+					x = (float64(metric.Timestamp) - float64(e.StartTime)) / 1000
+				}
+				glyph := 'v'
+				if index == 1 {
+					glyph = '^'
+				}
+				entry.Markers = append(entry.Markers, curveMarker{curvePoint{X: x, Y: displayChartValue(float64(metric.Value), e.Summary, profile.Normalize)}, glyph})
+			}
+		}
+		series = append(series, entry)
 	}
 	statusLines := []string{}
 	for i, e := range entries {
@@ -564,9 +662,18 @@ func (m *model) curveContent(v *inspectionView, entries []*historyEntry, w, h in
 			state += " · error: " + clean(e.Err)
 		}
 		if expanded || len(entries) == 1 {
-			statusLines = append(statusLines, fmt.Sprintf("%c %s · %d samples (%d nonfinite) · %s", seriesSymbol(i), clean(series[i].Name), e.Summary.Count, e.Summary.NonFiniteCount, state))
+			statusLines = append(statusLines, fmt.Sprintf("%c %s · %d samples (%d nonfinite) · %d plotted · %s", seriesSymbol(series[i].Slot-1), clean(series[i].Name), e.Summary.Count, e.Summary.NonFiniteCount, min(2400, e.Summary.Count), state))
 			if e.Summary.Min != nil {
-				statusLines = append(statusLines, fmt.Sprintf("Min %s @%d · Max %s @%d", e.Summary.Min.Value.String(), e.Summary.Min.Step, e.Summary.Max.Value.String(), e.Summary.Max.Step))
+				best := profile.Best[e.Metric]
+				if best == "min" {
+					statusLines = append(statusLines, distanceText("Best (min)", e.Extrema.Min))
+				} else if best == "max" {
+					statusLines = append(statusLines, distanceText("Best (max)", e.Extrema.Max))
+				} else if profile.Extrema {
+					statusLines = append(statusLines, distanceText("Min", e.Extrema.Min), distanceText("Max", e.Extrema.Max))
+				} else {
+					statusLines = append(statusLines, fmt.Sprintf("Raw min %s @%d · max %s @%d", e.Summary.Min.Value.String(), e.Summary.Min.Step, e.Summary.Max.Value.String(), e.Summary.Max.Step))
+				}
 			}
 		} else {
 			statusLines = append(statusLines, fmt.Sprintf("%c %s · %d samples", seriesSymbol(i), clean(series[i].Name), e.Summary.Count))
@@ -581,6 +688,13 @@ func (m *model) curveContent(v *inspectionView, entries []*historyEntry, w, h in
 		}
 		p.add("Loading history…")
 		return p
+	}
+	if preparing && !ready {
+		p.add("Preparing chart from full raw history…")
+		return p
+	}
+	if preparing {
+		p.add("Preparing remaining series…")
 	}
 	statusLimit := max(1, min(len(statusLines), h/3))
 	graphH := max(2, h-len(p.Lines)-statusLimit)
@@ -602,7 +716,7 @@ func (m *model) curveContent(v *inspectionView, entries []*historyEntry, w, h in
 		}
 		cursorX = &x
 	}
-	graph := renderCurvesAt(series, w, graphH, m.inspect.ASCII, cursorX)
+	graph := renderCurvesStyled(series, w, graphH, m.inspect.ASCII, cursorX, curveRenderOptions{Draw: profile.draw(), Normalize: profile.Normalize})
 	graphStart := len(p.Lines)
 	p.Lines = append(p.Lines, graph...)
 	p.Hits = append(p.Hits, hit{rect{12, graphStart, max(1, w-12), max(1, len(graph)-1)}, "inspect-chart"})
@@ -615,10 +729,15 @@ func (m *model) curveContent(v *inspectionView, entries []*historyEntry, w, h in
 		}
 		idx = clamp(idx, 0, len(e.History)-1)
 		point := e.History[idx]
+		rawIndex := idx
 		if m.elapsed && idx < len(e.TimeOrder) {
-			point = e.History[e.TimeOrder[idx]]
+			rawIndex = e.TimeOrder[idx]
+			point = e.History[rawIndex]
 		}
-		line := fmt.Sprintf("Cursor %d/%d · %s · step %d · %s", idx+1, len(e.History), point.Value.String(), point.Step, time.UnixMilli(point.Timestamp).Format(time.RFC3339Nano))
+		line := fmt.Sprintf("Cursor %d/%d · raw %s · step %d · %s", idx+1, len(e.History), point.Value.String(), point.Step, time.UnixMilli(point.Timestamp).Format(time.RFC3339Nano))
+		if d := e.Derived; (profile.Smooth || profile.Normalize) && d != nil && d.Key == chartTransformKey(e.Revision, profile) && rawIndex < len(d.Values) {
+			line += fmt.Sprintf(" · displayed %.6g", d.Values[rawIndex])
+		}
 		if len(p.Lines) >= h {
 			p.Lines[max(0, h-1)] = line
 		} else {
@@ -679,25 +798,48 @@ func renderCurves(series []curveSeries, width, height int, ascii bool) []string 
 	return renderCurvesAt(series, width, height, ascii, nil)
 }
 func renderCurvesAt(series []curveSeries, width, height int, ascii bool, cursorX *float64) []string {
+	return renderCurvesStyled(series, width, height, ascii, cursorX, curveRenderOptions{})
+}
+func renderCurvesStyled(series []curveSeries, width, height int, ascii bool, cursorX *float64, options curveRenderOptions) []string {
 	if width < 16 || height < 3 {
 		return []string{"Enlarge pane for curve"}
 	}
 	loX, hiX, loY, hiY := math.Inf(1), math.Inf(-1), math.Inf(1), math.Inf(-1)
 	count := 0
+	include := func(p curvePoint) {
+		if !finiteCurvePoint(p) {
+			return
+		}
+		loX = math.Min(loX, p.X)
+		hiX = math.Max(hiX, p.X)
+		loY = math.Min(loY, p.Y)
+		hiY = math.Max(hiY, p.Y)
+		count++
+	}
 	for _, s := range series {
-		for _, p := range s.Points {
-			if !finiteCurvePoint(p) {
-				continue
+		if options.Draw != "points" {
+			for _, point := range s.Points {
+				include(point)
 			}
-			loX = math.Min(loX, p.X)
-			hiX = math.Max(hiX, p.X)
-			loY = math.Min(loY, p.Y)
-			hiY = math.Max(hiY, p.Y)
-			count++
+		}
+		if options.Draw == "points" || options.Draw == "both" {
+			raw := s.Raw
+			if raw == nil {
+				raw = s.Points
+			}
+			for _, point := range raw {
+				include(point)
+			}
+		}
+		for _, marker := range s.Markers {
+			include(marker.Point)
 		}
 	}
 	if count == 0 {
 		return []string{"No finite history samples to plot."}
+	}
+	if options.Normalize {
+		loY, hiY = 0, 1
 	}
 	cols, rows := max(1, width-12), max(1, height-1)
 	sx, sy := 2, 4
@@ -708,9 +850,13 @@ func renderCurvesAt(series []curveSeries, width, height int, ascii bool, cursorX
 	bits := make([]byte, cols*rows)
 	owners := make([]int, cols*rows)
 	chars := make([]rune, cols*rows)
+	markers := make([]rune, cols*rows)
+	markerOwners := make([]int, cols*rows)
+	markerExtrema := make([]bool, cols*rows)
 	for i := range owners {
 		owners[i] = -1
 		chars[i] = ' '
+		markerOwners[i] = -1
 	}
 	if loY == hiY {
 		pad := math.Max(math.Abs(loY)*.01, 1)
@@ -731,8 +877,18 @@ func renderCurvesAt(series []curveSeries, width, height int, ascii bool, cursorX
 			owners[i] = len(curveColors)
 		}
 		chars[i] = seriesSymbol(owner)
+		if options.Draw == "both" {
+			chars[i] = '.'
+		}
 	}
-	for owner, s := range series {
+	for index, s := range series {
+		if options.Draw == "points" {
+			continue
+		}
+		owner := index
+		if s.Slot > 0 {
+			owner = s.Slot - 1
+		}
 		px, py := 0, 0
 		previous := false
 		for _, p := range s.Points {
@@ -773,6 +929,56 @@ func renderCurvesAt(series []curveSeries, width, height int, ascii bool, cursorX
 				set(x, y, owner)
 			}
 			px, py, previous = x, y, true
+		}
+	}
+	placeMarker := func(point curvePoint, glyph rune, owner int, extreme bool) {
+		if !finiteCurvePoint(point) {
+			return
+		}
+		x := clamp(int(math.Round(curveFraction(point.X, loX, hiX)*float64(pw-1))), 0, pw-1)
+		y := clamp(ph-1-int(math.Round(curveFraction(point.Y, loY, hiY)*float64(ph-1))), 0, ph-1)
+		i := (y/sy)*cols + x/sx
+		if extreme {
+			if markerExtrema[i] {
+				if markers[i] != glyph {
+					glyph = '*'
+				}
+				if markerOwners[i] != owner {
+					owner = len(curveColors)
+				}
+			}
+			markers[i], markerOwners[i], markerExtrema[i] = glyph, owner, true
+			return
+		}
+		if markers[i] != 0 && markerOwners[i] != owner {
+			markers[i] = '+'
+			markerOwners[i] = len(curveColors)
+			return
+		}
+		markers[i], markerOwners[i] = glyph, owner
+	}
+	if options.Draw == "points" || options.Draw == "both" {
+		for index, s := range series {
+			owner := index
+			if s.Slot > 0 {
+				owner = s.Slot - 1
+			}
+			raw := s.Raw
+			if raw == nil {
+				raw = s.Points
+			}
+			for _, point := range raw {
+				placeMarker(point, seriesSymbol(owner), owner, false)
+			}
+		}
+	}
+	for index, s := range series {
+		owner := index
+		if s.Slot > 0 {
+			owner = s.Slot - 1
+		}
+		for _, marker := range s.Markers {
+			placeMarker(marker.Point, marker.Glyph, owner, true)
 		}
 	}
 	out := make([]string, 0, rows+1)
@@ -827,6 +1033,9 @@ func renderCurvesAt(series []curveSeries, width, height int, ascii bool, cursorX
 					glyph = ':'
 				}
 				owner = len(curveColors)
+			}
+			if markers[i] != 0 {
+				glyph, owner = markers[i], markerOwners[i]
 			}
 			if owner != segmentOwner {
 				flush()

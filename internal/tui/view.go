@@ -93,6 +93,9 @@ func listStart(index, count, capacity int) int {
 }
 
 func (m *model) View() tea.View {
+	if view, ok := m.artifactPreviewView(); ok {
+		return view
+	}
 	if v, ok := m.extensionView(); ok {
 		return v
 	}

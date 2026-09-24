@@ -316,7 +316,7 @@ func (a *app) dashboard(ctx context.Context, mouseExplicit bool) error {
 		mouse = &a.mouse
 	}
 	var configMu sync.Mutex
-	return a.options.Dashboard(ctx, tui.Options{State: state, Mouse: mouse, Targets: targets, InitialTarget: initial, ConfigPath: cfg.SourcePath(), Connector: m, Input: a.options.In, Output: a.options.Out, MetricColumns: cfg.TUI.MetricColumns, ParameterColumns: cfg.TUI.ParameterColumns, RefreshSeconds: cfg.TUI.RefreshSeconds, Activity: cfg.Activity, Alerts: cfg.Alerts, SaveActivity: func(settings core.ActivitySettings, alerts core.AlertSettings) error {
+	return a.options.Dashboard(ctx, tui.Options{State: state, Mouse: mouse, Targets: targets, InitialTarget: initial, ConfigPath: cfg.SourcePath(), Connector: m, Input: a.options.In, Output: a.options.Out, MetricColumns: cfg.TUI.MetricColumns, ParameterColumns: cfg.TUI.ParameterColumns, RefreshSeconds: cfg.TUI.RefreshSeconds, PreviewMaxBytes: cfg.TUI.PreviewMaxBytes, Activity: cfg.Activity, Alerts: cfg.Alerts, SaveActivity: func(settings core.ActivitySettings, alerts core.AlertSettings) error {
 		configMu.Lock()
 		defer configMu.Unlock()
 		previousSettings, previousAlerts := cfg.Activity, cfg.Alerts

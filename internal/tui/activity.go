@@ -45,6 +45,10 @@ type activityState struct {
 	ExperimentNames                                      map[string]string
 	MetadataAt                                           map[string]int64
 	PolicyEdits                                          map[string]core.ActivityPolicy
+	RetainedRun                                          string
+	SuppressRetention                                    bool
+	ManualRefreshGen                                     uint64
+	ManualRefreshScope                                   runListScope
 }
 
 func (m *model) activityStore() core.ActivityStore {
@@ -203,6 +207,10 @@ func (m *model) openActivity(scope runListScope, focus bool) tea.Cmd {
 	if !valid {
 		scope = scopeUnread
 	}
+	if a.Scope != scope {
+		m.releaseActivityRetention()
+		a.ManualRefreshGen = 0
+	}
 	a.Scope, a.LastScope = scope, scope
 	m.compare = false
 	m.chart = false
@@ -217,9 +225,11 @@ func (m *model) openActivity(scope runListScope, focus bool) tea.Cmd {
 	return tea.Batch(m.ensureDetails(), m.refreshActivity(false, nil))
 }
 func (m *model) leaveActivity() {
+	m.releaseActivityRetention()
 	if a := m.activityCurrent(); a != nil {
 		a.Scope = scopeExperiment
 		a.Inspect = nil
+		a.ManualRefreshGen = 0
 	}
 }
 func (m *model) moveActivitySidebar(delta int) tea.Cmd {
@@ -270,6 +280,7 @@ type activityRunMsg struct {
 	run                  core.Run
 	err                  error
 	observedAt, revision int64
+	startedAt            int64
 }
 type activityChangedMsg struct {
 	source, label string
@@ -306,6 +317,22 @@ func (m *model) loadActivity() tea.Cmd {
 }
 func (m *model) refreshActivity(full bool, experiments []string) tea.Cmd {
 	return m.refreshActivityLimit(full, experiments, 100)
+}
+func (m *model) refreshActivityManually() tea.Cmd {
+	a := m.activityState()
+	if a == nil {
+		return nil
+	}
+	// A deliberate refresh supersedes an automatic read instead of being
+	// silently ignored while that read is pending.
+	if cancel := m.cancel["activity:fast"]; cancel != nil {
+		cancel()
+	}
+	a.Pending = false
+	cmd := m.refreshActivity(false, nil)
+	a.ManualRefreshGen = a.Gen
+	a.ManualRefreshScope = a.Scope
+	return cmd
 }
 func (m *model) refreshActivityLimit(full bool, experiments []string, limit int) tea.Cmd {
 	a, s := m.activityState(), m.state()
@@ -382,6 +409,7 @@ func (m *model) stopActivity() {
 	}
 	m.seq++
 	for _, a := range m.activities {
+		a.ManualRefreshGen = 0
 		a.Gen = m.seq
 		a.FullGen = m.seq
 		a.RunGen = m.seq
@@ -449,6 +477,12 @@ func (m *model) updateActivity(msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		a.Err = ""
+		if !v.full && v.gen == a.ManualRefreshGen {
+			if a.Scope == a.ManualRefreshScope {
+				m.releaseActivityRetention()
+			}
+			a.ManualRefreshGen = 0
+		}
 		var missing []string
 		if !v.full && !a.FullPending {
 			for _, e := range a.Snapshot.Experiments {
@@ -480,11 +514,16 @@ func (m *model) updateActivity(msg tea.Msg) (tea.Cmd, bool) {
 			m.status = "Run details returned an unexpected run ID"
 			return nil, true
 		}
-		if record, ok := a.Snapshot.Records[v.id]; ok && (record.ObservedAt > v.observedAt || record.Revision > v.revision) {
+		readAt := v.startedAt
+		if readAt == 0 {
+			readAt = v.observedAt
+		}
+		if record, ok := a.Snapshot.Records[v.id]; ok && record.ObservedAt > readAt {
 			v.run = mergeActivityMetadata(v.run, record)
+			readAt = record.ObservedAt
 		}
 		a.Runs[v.id] = &v.run
-		a.MetadataAt[v.id] = time.Now().UnixMilli()
+		a.MetadataAt[v.id] = readAt
 		m.rebuildActivityViews()
 		if r := m.runs(); r != nil && r.Selected == v.id && a.Scope != scopeExperiment {
 			a.Inspect = &v.run
@@ -672,8 +711,27 @@ func (m *model) rebuildActivityViews() {
 	for _, scope := range activityScopes {
 		r := a.Views[scope]
 		selected, index := r.Selected, r.Index
+		wasMember := false
+		for _, run := range r.Rows {
+			if run.ID() == selected {
+				wasMember = true
+				break
+			}
+		}
 		rows := m.activityRecords(scope)
 		a.ScopeCounts[scope] = len(rows)
+		if scope == scopeRunning && a.Scope == scope && !a.SuppressRetention && selected != "" {
+			if record, ok := a.Snapshot.Records[selected]; ok && terminalRunStatus(record.Status) && m.activityRetentionVisible(record, r.View.Visibility) && (wasMember || a.RetainedRun == selected) {
+				a.RetainedRun = selected
+				// This row is presentation-only; counts still use the Running predicate.
+				at := clamp(index, 0, len(rows))
+				rows = append(rows, core.ActivityRecord{})
+				copy(rows[at+1:], rows[at:])
+				rows[at] = record
+			} else if a.RetainedRun == selected {
+				a.RetainedRun = ""
+			}
+		}
 		if scope == scopeRecent && a.RecentLimit > 0 && len(rows) > a.RecentLimit {
 			rows = rows[:a.RecentLimit]
 		}
@@ -699,7 +757,7 @@ func (m *model) rebuildActivityViews() {
 				break
 			}
 		}
-		if !found && a.Scope == scope && a.Inspect != nil && a.Inspect.ID() == selected && m.focus == 2 {
+		if !found && scope != scopeRunning && a.Scope == scope && a.Inspect != nil && a.Inspect.ID() == selected && m.focus == 2 {
 			continue
 		}
 		r.Index = clamp(index, 0, len(presented)-1)
@@ -708,6 +766,47 @@ func (m *model) rebuildActivityViews() {
 			r.Selected = presented[r.Index].ID
 		}
 	}
+}
+func (m *model) activityRetentionVisible(record core.ActivityRecord, visibility string) bool {
+	if record.LifecycleStage == "deleted" {
+		return false
+	}
+	a, s := m.activityCurrent(), m.state()
+	if a == nil || s == nil {
+		return false
+	}
+	if !visibilityMatches(visibility, s.Visibility[core.VisibilityKey("run", record.RunID)]) || !visibilityMatches(visibility, s.Visibility[core.VisibilityKey("experiment", record.ExperimentID)]) {
+		return false
+	}
+	if a.Snapshot.Initialized {
+		for _, experiment := range a.Snapshot.Experiments {
+			if experiment.ID == record.ExperimentID {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+func (m *model) releaseActivityRetention() {
+	a := m.activityCurrent()
+	if a == nil {
+		return
+	}
+	// Navigation invalidates an earlier manual-refresh cleanup intent, even
+	// when the newly selected run has not finished yet.
+	a.ManualRefreshGen = 0
+	if a.RetainedRun == "" {
+		return
+	}
+	id := a.RetainedRun
+	a.RetainedRun = ""
+	a.SuppressRetention = true
+	if a.Inspect != nil && a.Inspect.ID() == id {
+		a.Inspect = nil
+	}
+	m.rebuildActivityViews()
+	a.SuppressRetention = false
 }
 func (m *model) loadActivityRows(more bool) tea.Cmd {
 	a := m.activityState()
@@ -746,9 +845,10 @@ func (m *model) loadActivityRun(force bool) tea.Cmd {
 	a.RunPending = id
 	source, backend := core.SourceKey(m.target()), s.Session.Backend
 	record := a.Snapshot.Records[id]
+	startedAt := time.Now().UnixMilli()
 	return func() tea.Msg {
 		run, err := backend.GetRun(ctx, id)
-		return activityRunMsg{source: source, id: id, gen: gen, run: run, err: err, observedAt: record.ObservedAt, revision: record.Revision}
+		return activityRunMsg{source: source, id: id, gen: gen, run: run, err: err, observedAt: record.ObservedAt, revision: record.Revision, startedAt: startedAt}
 	}
 }
 func (m *model) nextUnread(delta int) tea.Cmd {
@@ -782,7 +882,9 @@ func (m *model) nextUnread(delta int) tea.Cmd {
 	} else {
 		index = (index + delta + len(rows)) % len(rows)
 	}
+	m.releaseActivityRetention()
 	a.Scope = scopeUnread
+	a.ManualRefreshGen = 0
 	a.LastScope = scopeUnread
 	a.Inspect = nil
 	m.focus = 1

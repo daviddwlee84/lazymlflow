@@ -201,10 +201,52 @@ type RunPage struct {
 	NextPageToken string `json:"next_page_token,omitempty"`
 }
 type Artifact struct {
-	Path     string `json:"path"`
-	IsDir    bool   `json:"is_dir"`
-	FileSize int64  `json:"file_size,omitempty"`
+	Path          string `json:"path"`
+	IsDir         bool   `json:"is_dir"`
+	FileSize      int64  `json:"file_size,omitempty"`
+	FileSizeKnown bool   `json:"-"`
 }
+
+func (a *Artifact) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Path  string          `json:"path"`
+		IsDir bool            `json:"is_dir"`
+		Size  json.RawMessage `json:"file_size"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	*a = Artifact{Path: wire.Path, IsDir: wire.IsDir}
+	if len(wire.Size) == 0 || string(wire.Size) == "null" {
+		return nil
+	}
+	value := string(wire.Size)
+	if wire.Size[0] == '"' {
+		if err := json.Unmarshal(wire.Size, &value); err != nil {
+			return err
+		}
+	}
+	size, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid artifact size: %w", err)
+	}
+	a.FileSize, a.FileSizeKnown = size, size >= 0
+	return nil
+}
+
+func (a Artifact) MarshalJSON() ([]byte, error) {
+	var size *int64
+	if a.FileSizeKnown || a.FileSize != 0 {
+		value := a.FileSize
+		size = &value
+	}
+	return json.Marshal(struct {
+		Path  string `json:"path"`
+		IsDir bool   `json:"is_dir"`
+		Size  *int64 `json:"file_size,omitempty"`
+	}{a.Path, a.IsDir, size})
+}
+
 type ArtifactPage struct {
 	Files         []Artifact `json:"files"`
 	RootURI       string     `json:"root_uri,omitempty"`

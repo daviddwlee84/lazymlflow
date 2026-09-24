@@ -32,11 +32,25 @@ def main():
                if not k.startswith(("MLFLOW_TRACKING", "MLFLOW_REGISTRY", "LAZYMLFLOW_"))}
         env.update(XDG_CONFIG_HOME=str(root / "config"), XDG_CACHE_HOME=str(root / "cache"),
                    XDG_STATE_HOME=str(root / "state"), XDG_DATA_HOME=str(root / "data"), NO_COLOR="1")
+        temporary = root / "tmp"
+        temporary.mkdir()
+        env.update(TMPDIR=str(temporary), TMP=str(temporary), TEMP=str(temporary))
         config = root / "targets.toml"
         artifact = root / "seed"
         (artifact / "nested").mkdir(parents=True)
         (artifact / "nested" / "weights.bin").write_bytes(b"\x00\x01\x02MLflow\xff")
         (artifact / "專案 é.txt").write_text("hello MLflow\n", encoding="utf-8")
+        previews = artifact / "preview"
+        previews.mkdir()
+        preview_json = '{"precise":9007199254740993123456789,"nested":[true,{"value":"中文"}]}'
+        preview_large = '{"payload":"' + "x" * 4096 + '","tail":42}'
+        preview_unicode = "\t中文與 emoji 🙂\nsecond line\n"
+        preview_csv = "name,value\nfirst,1\nsecond,2\n"
+        (previews / "small.json").write_text(preview_json, encoding="utf-8")
+        (previews / "large.json").write_text(preview_large, encoding="utf-8")
+        (previews / "empty.txt").write_bytes(b"")
+        (previews / "unicode.txt").write_text(preview_unicode, encoding="utf-8")
+        (previews / "table.csv").write_text(preview_csv, encoding="utf-8")
         recorded = {}
         activity_seeds = {}
         for target, uri in (("sqlite", "sqlite:///" + str(root / "tracking.db")),
@@ -71,11 +85,15 @@ def main():
             client.log_metric(best, "best_corr", .7, timestamp=timestamp, step=1)
             activity_seeds[target] = (review, failed, nonfinite, best, timestamp)
 
-        def call(*arguments, expected=0):
+        def execute(*arguments, expected=0):
             p = subprocess.run([binary, "--config", str(config), *arguments], env=env,
                                cwd=root, capture_output=True, text=True, timeout=120)
             if p.returncode != expected:
                 raise AssertionError(f"{arguments}: exit {p.returncode}\n{p.stdout}\n{p.stderr}")
+            return p
+
+        def call(*arguments, expected=0):
+            p = execute(*arguments, expected=expected)
             if "--json" in arguments and p.stdout.strip():
                 return json.loads(p.stdout)
             return p.stdout
@@ -96,10 +114,52 @@ def main():
             history = call("--target", target, "metrics", "history", runs[0], "loss", "--json")["metrics"]
             assert len(history) == 4 and sum(p["step"] == 2 for p in history) == 2
             listing = call("--target", target, "artifacts", "ls", runs[0], "--json")
-            assert {item["path"] for item in listing["files"]} == {"nested", "專案 é.txt"}
+            assert {item["path"] for item in listing["files"]} == {"nested", "preview", "專案 é.txt"}
+
+            print(f"MLflow {version}: {target} bounded text/JSON/CSV artifact previews", flush=True)
+            preview_args = ("--target", target, "artifacts", "preview", runs[0])
+            document = call(*preview_args, "preview/small.json", "--json")
+            assert document["formatted"] and not document["truncated"] and not document["binary"], document
+            assert json.loads(document["text"]) == json.loads(preview_json)
+            assert "9007199254740993123456789" in document["text"], "JSON preview rounded an integer"
+            assert document["info"]["size"] == len(preview_json.encode("utf-8"))
+            assert document["bytes_read"] == len(preview_json.encode("utf-8"))
+
+            document = call(*preview_args, "preview/empty.txt", "--json")
+            assert document["info"]["size"] == 0 and document["text"] == "" and document["bytes_read"] == 0
+            assert not document["truncated"] and not document["binary"], document
+            empty_listing = call("--target", target, "artifacts", "ls", runs[0], "preview", "--json")
+            # MLflow's protobuf JSON may omit an empty file's zero size. The
+            # preview's opened-file stat above must still report known zero.
+            empty_entry = next(item for item in empty_listing["files"] if item["path"] == "preview/empty.txt")
+            assert empty_entry.get("file_size") in (None, 0)
+
+            # Noninteractive callers must explicitly approve the actual known
+            # file size before content is read. The approved path still returns
+            # only a bounded prefix, with its one-byte truncation probe.
+            rejected = execute(*preview_args, "preview/large.json", "--max-bytes", "32", "--json", expected=2)
+            assert not rejected.stdout.strip() and "--allow-large" in rejected.stderr
+            assert "preview confirmation required" in rejected.stderr
+            document = call(*preview_args, "preview/large.json", "--max-bytes", "32", "--allow-large", "--json")
+            assert document["truncated"] and not document["formatted"] and not document["binary"], document
+            assert document["text"] == preview_large[:32] and document["bytes_read"] == 33
+            assert document["info"]["size"] == len(preview_large.encode("utf-8"))
+            assert "prefix" in document["warning"], document
+
+            document = call(*preview_args, "preview/unicode.txt", "--json")
+            assert document["text"] == preview_unicode and not document["binary"] and not document["truncated"]
+            document = call(*preview_args, "preview/table.csv", "--json")
+            assert document["text"] == preview_csv and not document["formatted"] and not document["binary"]
+            document = call(*preview_args, "nested/weights.bin", "--json")
+            assert document["binary"] and not document["text"] and "Binary" in document["warning"]
+            rejected = execute(*preview_args, "nested/weights.bin", expected=1)
+            assert not rejected.stdout.strip() and "binary" in rejected.stderr
+            assert not list(temporary.glob("lazymlflow-preview-*")), "built-in preview created/leaked a pager temporary file"
+            assert not list(root.rglob(".lazymlflow-download-*")), "preview staged a complete SDK download"
+
             output = root / (target + "-download")
             download = call("--target", target, "artifacts", "download", runs[0], "--dest", str(output), "--json")
-            assert download["files"] == 2
+            assert download["files"] == 7
             assert (output / "nested" / "weights.bin").read_bytes() == (artifact / "nested" / "weights.bin").read_bytes()
             call("--target", target, "artifacts", "download", runs[0], "--dest", str(output), "--json", expected=1)
         assert before == hashlib.sha256((root / "tracking.db").read_bytes()).hexdigest(), "read-only SQLite changed"
@@ -174,6 +234,7 @@ def main():
         call("--tracking-uri", "sqlite:///" + str(missing), "experiments", "list", "--json", expected=1)
         assert not missing.exists()
         print(f"PASS real MLflow {version}: both stores, queries/comparisons/histories/downloads; read-only SQLite unchanged; "
+              "bounded text/JSON/CSV/empty/binary previews, explicit large-file approval and truncated prefixes; "
               "Activity full counts, cross-experiment recent/running, read/unread windows, FAILED/NaN episodes and exact best-metric subscriptions", flush=True)
 
 

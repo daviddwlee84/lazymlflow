@@ -45,6 +45,11 @@ func RunAttachedInDir(ctx context.Context, argv, env []string, directory string,
 	if err := cmd.Start(); err != nil {
 		return 0, fmt.Errorf("start command %q: %w", argv[0], err)
 	}
+	if err := startedAttached(cmd); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return 0, err
+	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	select {

@@ -39,26 +39,29 @@ type inspectionView struct {
 	Overlay                            []string
 	Cursor                             int
 	MetricMetadata                     string
+	MetricContext                      string
 	MetricRevision, MetricViewRevision uint64
 }
 type inspectionState struct {
-	CompareCursor     int
-	Views             map[string]*inspectionView
-	Histories         map[string]*historyEntry
-	Search            textinput.Model
-	Typing            bool
-	Picker            []string
-	PickerIndex       int
-	Value             string
-	Auto              bool
-	PollGen           uint64
-	RunGen            uint64
-	RunPending        bool
-	Slots             chan struct{}
-	ASCII             bool
-	MetricPreferences map[string]*experimentMetricPreferences
-	OverlayDraft      []string
-	OverlayDraftKey   string
+	CompareCursor       int
+	Views               map[string]*inspectionView
+	Histories           map[string]*historyEntry
+	Search              textinput.Model
+	Typing              bool
+	Picker              []string
+	PickerIndex         int
+	Value               string
+	Auto                bool
+	PollGen             uint64
+	RunGen              uint64
+	RunPending          bool
+	Slots               chan struct{}
+	ASCII               bool
+	MetricPreferences   map[string]*experimentMetricPreferences
+	ChartContexts       map[string]*experimentMetricPreferences
+	LastExperimentChart map[string]string
+	OverlayDraft        []string
+	OverlayDraftKey     string
 }
 
 func (m *model) initInspection() {
@@ -273,13 +276,14 @@ func (m *model) filterInspection(v *inspectionView) {
 }
 func (m *model) inspectionActions() []action {
 	if m.compare {
-		return []action{act("inspect-metric", "m", "Choose history metric"), act("inspect-auto", "R", "Toggle automatic metric refresh"), act("inspect-ascii", "u", "Toggle Braille / ASCII curves")}
+		return append([]action{act("inspect-metric", "m", "Choose history metric"), act("inspect-auto", "R", "Toggle automatic metric refresh"), act("inspect-ascii", "u", "Toggle Braille / ASCII curves")}, m.chartActions()...)
 	}
 	if m.focus != 2 || !m.isInspectionTab() || m.run() == nil {
 		return nil
 	}
 	a := []action{act("inspect-search", "/", "Search this table"), act("inspect-sort", "s", "Sort this table"), act("inspect-copy", "Y", "Copy selected value")}
 	if m.tab == 1 {
+		a = append(a, m.chartActions()...)
 		a = append(a, act("inspect-metric", "m", "Choose metric"), act("inspect-dashboard", "v", "Table / metric dashboard"), act("inspect-overlay", "p", "Overlay up to four metrics"), act("inspect-auto", "R", "Toggle automatic metric refresh"), act("inspect-ascii", "u", "Toggle Braille / ASCII curves"), act("inspect-system", "e", "Model / system / all metrics"))
 		a = append(a, act("inspect-pin", "*", "Pin / unpin metric for this experiment"), act("inspect-pin-prev", "<", "Move pinned metric earlier"), act("inspect-pin-next", ">", "Move pinned metric later"))
 	}
@@ -294,17 +298,22 @@ func (m *model) inspectionFooter() string {
 		case "inspect-value":
 			return "↑↓/jk scroll · Y copy full value · Esc return"
 		case "inspect-overlay":
-			return "Space toggle (maximum four) · * pin · < > order · Enter apply · / search · Esc cancel"
+			return "Space toggle · 0 clear draft · * pin · < > order · Enter apply · / search · Esc cancel"
+		case "inspect-chart-options":
+			return "↑↓/jk select · Enter toggle · ←→ adjust EMA span · Esc close"
 		default:
 			return "↑↓ select · Enter apply · / search · Esc return"
 		}
+	}
+	if m.compare && m.chart && m.overlay == "" && m.inputMode == "" && m.targetForm == nil {
+		return "←→ sample · a axis · m metric · f options · F EMA · n normalize · d drawing · b extrema · u ASCII · v table"
 	}
 	if m.overlay != "" || m.inputMode != "" || m.targetForm != nil || m.focus != 2 || !m.isInspectionTab() {
 		return ""
 	}
 	if m.tab == 1 {
 		if v := m.inspectionView(); v != nil && v.ExpandedChart {
-			return "←→/hl sample · a axis · p overlay · u ASCII · R auto · Esc table · z zoom"
+			return "←→ sample · a axis · p/0 overlay · f options · F EMA · n normalize · d drawing · b extrema · Esc table"
 		}
 		return "↑↓ select · / search · s sort · Enter curve · v dashboard · p overlay · * pin · < > order · R auto · z zoom"
 	}
@@ -314,6 +323,9 @@ func (m *model) inspectionFooter() string {
 	return "↑↓ select · / search · s sort · Enter full value · Y copy value · y run ID · z zoom"
 }
 func (m *model) performInspection(id string) (tea.Cmd, bool) {
+	if cmd, handled := m.performChartAction(id); handled {
+		return cmd, true
+	}
 	v := m.inspectionView()
 	in := !m.compare && m.focus == 2 && m.isInspectionTab()
 	switch id {
@@ -528,6 +540,8 @@ func (m *model) updateInspection(msg tea.Msg) (tea.Cmd, bool) {
 		return nil, false
 	}
 	switch v := msg.(type) {
+	case chartTransformedMsg:
+		return m.acceptChartTransform(v), true
 	case metricPreferencesLoadedMsg:
 		return m.acceptMetricPreferences(v), true
 	case metricLoadedMsg:
@@ -582,6 +596,9 @@ func (m *model) updateInspection(msg tea.Msg) (tea.Cmd, bool) {
 		m.inspect.Search.Blur()
 		return m.ensureHistories(false), true
 	}
+	if m.overlay == "inspect-chart-options" {
+		return m.chartOptionsKey(k), true
+	}
 	if m.overlay == "inspect-value" {
 		switch k {
 		case "Y":
@@ -624,6 +641,10 @@ func (m *model) updateInspection(msg tea.Msg) (tea.Cmd, bool) {
 			m.applyInspectionSearch()
 		}
 		return cmd, true
+	}
+	if m.overlay == "inspect-overlay" && k == "0" {
+		m.inspect.OverlayDraft = nil
+		return nil, true
 	}
 	if k == "/" && m.overlay != "inspect-sort" {
 		m.inspect.Typing = true
@@ -710,7 +731,14 @@ func (m *model) inspectionOverlay(w, h int) (string, bool) {
 	}
 	var lines []string
 	title := "Inspect"
-	if m.overlay == "inspect-search" {
+	if m.overlay == "inspect-chart-options" {
+		rows := m.chartOptionRows()
+		start := listStart(m.inspect.PickerIndex, len(rows), max(1, h-2))
+		for i := start; i < min(len(rows), start+max(1, h-2)); i++ {
+			lines = append(lines, row(rows[i], i == m.inspect.PickerIndex, w-2))
+		}
+		return frame("Chart options · "+m.chartContextLabel()+" · session", lines, w, h, true), true
+	} else if m.overlay == "inspect-search" {
 		v := m.inspectionView()
 		lines = []string{m.inspect.Search.View(), "Enter keeps query · Esc clears · ↑↓ select"}
 		if v != nil {
@@ -736,7 +764,7 @@ func (m *model) inspectionOverlay(w, h int) (string, bool) {
 			lines = append(lines, m.inspect.Search.View())
 		}
 		if m.overlay == "inspect-overlay" {
-			title = "Overlay metrics · this experiment / session · maximum four"
+			title = "Overlay metrics · " + m.chartContextLabel() + " · session · maximum four"
 		} else if m.overlay == "inspect-sort" {
 			title = "Sort table"
 		} else {
@@ -950,6 +978,9 @@ func (m *model) inspectionTick() tea.Cmd {
 }
 
 func (m *model) inspectionOverlayHit(x, y int) string {
+	if m.overlay == "inspect-chart-options" {
+		return m.chartOptionsHit(x, y)
+	}
 	r := m.geometry().Content
 	if !r.contains(x, y) || x <= r.X || x >= r.X+r.W-1 || y <= r.Y || y >= r.Y+r.H-1 {
 		return ""
@@ -1005,6 +1036,10 @@ func (m *model) inspectionMouse(msg tea.Msg) tea.Cmd {
 		if v.Mouse().Button == tea.MouseWheelUp {
 			d = -1
 		}
+		if m.overlay == "inspect-chart-options" {
+			m.inspect.PickerIndex = clamp(m.inspect.PickerIndex+d, 0, len(m.chartOptionRows())-1)
+			return nil
+		}
 		if m.overlay == "inspect-value" {
 			m.menuIndex = max(0, m.menuIndex+d)
 			return nil
@@ -1041,6 +1076,10 @@ func (m *model) inspectionMouse(msg tea.Msg) tea.Cmd {
 	kind, key, _ := strings.Cut(id, ":")
 	v := m.inspectionView()
 	switch kind {
+	case "chart-option":
+		index, _ := strconv.Atoi(key)
+		m.inspect.PickerIndex = index
+		return m.changeChartOption(index, 1)
 	case "sort":
 		if v != nil {
 			v.Sort, _ = strconv.Atoi(key)

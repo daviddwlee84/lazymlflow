@@ -15,7 +15,7 @@ import (
 )
 
 func (a *app) artifactsCommand() *cobra.Command {
-	group := a.group("artifacts", "Browse and download run artifacts")
+	group := a.group("artifacts", "Browse, preview and download run artifacts")
 	ls := &cobra.Command{Use: "ls RUN_ID [PATH]", Short: "List an artifact directory", Args: rangeArgs(1, 2), RunE: func(cmd *cobra.Command, args []string) error {
 		path := ""
 		if len(args) > 1 {
@@ -70,7 +70,7 @@ func (a *app) artifactsCommand() *cobra.Command {
 	}}
 	download.Flags().StringVar(&destination, "dest", "", "Exact output file or directory path (required)")
 	download.Flags().BoolVar(&overwrite, "overwrite", false, "Replace an existing destination")
-	group.AddCommand(ls, download)
+	group.AddCommand(ls, download, a.artifactPreviewCommand())
 	return group
 }
 

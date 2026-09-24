@@ -56,11 +56,11 @@ func SummarizeHistory(history []Metric) MetricSummary {
 			v := m
 			s.Last = &v
 		}
-		if s.Min == nil || m.Value < s.Min.Value {
+		if s.Min == nil || m.Value < s.Min.Value || m.Value == s.Min.Value && metricEarlier(m, *s.Min) {
 			v := m
 			s.Min = &v
 		}
-		if s.Max == nil || m.Value > s.Max.Value {
+		if s.Max == nil || m.Value > s.Max.Value || m.Value == s.Max.Value && metricEarlier(m, *s.Max) {
 			v := m
 			s.Max = &v
 		}

@@ -32,6 +32,7 @@ type Options struct {
 	Activity         core.ActivitySettings
 	Alerts           core.AlertSettings
 	SaveActivity     func(core.ActivitySettings, core.AlertSettings) error
+	PreviewMaxBytes  int64
 }
 
 func Run(ctx context.Context, opts Options) error {
@@ -108,6 +109,7 @@ type targetState struct {
 }
 
 type model struct {
+	preview                                 *artifactPreviewState
 	activities                              map[string]*activityState
 	activityTickGen                         uint64
 	extensions                              *extensionState
@@ -269,6 +271,8 @@ func (m *model) operation(name string) (context.Context, uint64) {
 	return ctx, m.seq
 }
 func (m *model) stopAll() {
+	m.stopArtifactPreview()
+	m.releaseActivityRetention()
 	m.stopActivity()
 	m.stopInspection()
 	m.seq++
@@ -307,6 +311,9 @@ func (m *model) stopAll() {
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	defer m.refreshRowCache()
 	defer m.syncInspection()
+	if cmd, handled := m.updateArtifactPreview(msg); handled {
+		return m, cmd
+	}
 	if cmd, handled := m.updateActivity(msg); handled {
 		return m, cmd
 	}
@@ -485,7 +492,8 @@ type action struct {
 
 func act(id, keys, label string) action { return action{id, strings.Split(keys, "|"), label} }
 func (m *model) actions() []action {
-	a := append(m.activityActions(), m.workspaceActions()...)
+	a := append(m.artifactPreviewActions(), m.activityActions()...)
+	a = append(a, m.workspaceActions()...)
 	a = append(a, m.inspectionActions()...)
 	a = append(a, act("server-setup", "ctrl+n", "Set up a persistent MLflow server"), act("model-registry", "O", "Browse registered models"), act("target-environment", "E", "Experiment environment"))
 	if m.run() != nil {
@@ -543,6 +551,9 @@ func (m *model) actions() []action {
 }
 
 func (m *model) perform(id string) tea.Cmd {
+	if id == "artifact-preview" {
+		return m.openArtifactPreview(false)
+	}
 	if cmd, ok := m.performActivity(id); ok {
 		return cmd
 	}
@@ -929,6 +940,9 @@ func (m *model) handleInput(msg tea.Msg, key string) tea.Cmd {
 }
 
 func (m *model) setLocal(value string) {
+	if m.activityScope() != scopeExperiment && m.focus == 1 {
+		m.releaseActivityRetention()
+	}
 	if m.focus == 0 {
 		if s := m.state(); s != nil {
 			s.Local = value
@@ -1001,6 +1015,7 @@ func (m *model) selectRun(index int) {
 	}
 	if s.Selected != previous {
 		m.chart = false
+		m.releaseActivityRetention()
 	}
 	m.detailOffset = 0
 }
@@ -1094,7 +1109,7 @@ func (m *model) artifactEnter() tea.Cmd {
 	}
 	v := a.Rows[clamp(a.Index, 0, len(a.Rows)-1)]
 	if !v.IsDir {
-		return m.prepareDownload()
+		return m.openArtifactPreview(false)
 	}
 	m.artifactPath[m.active+"\x00"+r.ID()] = v.Path
 	return m.loadArtifacts()

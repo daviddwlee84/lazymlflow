@@ -286,12 +286,12 @@ local visibility choices persist across launches.
 | Ctrl+N / `t`, then `s` | Set up a persistent MLflow server |
 | `E` / `O` / `C` | Target environment / registered models / selected run's models |
 | `/` | Search already loaded rows; Enter accepts, Esc clears |
-| `f` | Submit a server-side MLflow filter |
+| `f` | Server-side filter in lists / chart settings in Metrics |
 | `s` | Searchable sort picker; Enter sets primary, Space adds secondary |
 | `b` | Parameter groups, nested/flat mode and default expansion |
 | `L` / `V` | Layout / local visibility menus |
 | `H` / `X` / `U` | Hide / archive / restore the selected item locally |
-| `n` | Load next page |
+| `n` | Next page in lists / independent 0–1 scales in charts |
 | `A` / Ctrl+X | Load all matching pages / cancel background collection |
 | `r` | Refresh; previous rows survive a failed refresh |
 | Space / `c` | Select runs / open comparison |
@@ -299,10 +299,13 @@ local visibility choices persist across launches.
 | `m` | Choose a metric and load history |
 | `v` | Searchable column checkboxes, or toggle comparison table/chart |
 | `a` in chart | Switch step / elapsed-time axis |
+| `0` / `F` / `b` in chart | Toggle overlay / EMA smoothing / raw extrema |
+| `d` in chart | Points / Lines / Both |
 | `[` / `]` | Change details tab |
 | `P` | Inspect a parent run that is outside the loaded results |
 | `B` / `N` / `S` | Dataset workspace / local journal / summary and prompt |
-| `d` / `D` / Ctrl+X | Download selection / current directory / cancel download |
+| Enter / `p` in Artifacts | Preview selected file; Enter navigates directories |
+| `d` / `D` / Ctrl+X in Artifacts | Download selection / current directory / cancel download |
 | `o` / `y` | Open selected resource in browser / copy full ID or path |
 | `?` / `:` | Context help / action menu |
 | Esc / `q` | Back / quit |
@@ -330,6 +333,14 @@ the experiment list's search and pagination. Running sorts by start time; Recent
 includes finished, failed and killed runs sorted by end time. Recent starts with
 100 rows; `n` loads more and `A` loads all once. Subsequent background polls stay
 bounded to current activity rather than repeating that historical query.
+
+When the selected Running run finishes, its row stays visible with the real
+terminal status and a "kept while reading" note. The Running count immediately
+excludes it. Moving focus between panes, adjusting charts, sorting or resizing
+keeps the reading position. Selecting another row, changing scope/search/visibility,
+or successfully refreshing the Activity list with `r` dismisses it. Refreshing
+only its details keeps it; failed list refreshes retain usable content. This is
+session-only presentation state, not a change to the run or CLI query results.
 
 The compact sidebar uses about 22% of the terminal, capped at 36 cells until
 manually resized. Long names use middle truncation; `i` shows the complete name
@@ -488,14 +499,70 @@ Background history loading is bounded, cancelable and isolated by source/run/key
 a failed refresh retains the prior usable history with its error.
 
 Overlay choices and table/dashboard/curve mode follow the experiment for the
-current session, including when entered from Activity. A missing selected metric
+current session. Each Activity scope (Running, Recent, Unread, Alerts) has its
+own independent session chart profile, so browsing across experiments in that
+list reuses the same selected metric keys. The first Activity profile inherits
+the current experiment's overlay; later edits and explicit clears stay local to
+that Activity scope. Pins and subscriptions still use the actual experiment.
+A missing selected metric
 is skipped without removing its selection; it joins the overlay when a refresh
 finds it. With every selected metric missing, the view says they are not logged
 yet instead of showing an endless loading state. The overlay picker uses Enter
 to apply and Esc to cancel, with at most four selected keys including missing
-ones. `*` pins a metric, and `<`/`>` reorders pinned metrics. Pins lead the table,
+ones. `0` inside the picker clears its draft; outside the picker it switches
+overlay off/on while preserving the choices. `*` pins a metric, and `<`/`>` reorders pinned metrics. Pins lead the table,
 dashboard and pickers and persist per experiment; overlay choices reset on
 restart. Pins and update subscriptions are independent.
+
+Chart defaults are raw scale, smoothing off, and **Both** samples and connecting
+lines. `d` cycles Points/Lines/Both; raw samples have distinct markers even in
+ASCII or no-color terminals. Counts distinguish logged samples from displayed
+samples when drawing is reduced for terminal size. `F` toggles EMA smoothing,
+initially a span of 10 samples; `f` opens the chart options. EMA uses
+`alpha = 2/(span+1)`, starts with the first finite sample of each segment, and
+resets at NaN/infinity gaps. It is computed on full history before drawing is
+sampled. The raw cursor values and extrema remain independent of smoothing.
+
+`n` switches to independent 0–1 scales: each curve uses its own full raw finite
+minimum and maximum. Constant curves sit at 0.5 and are labelled; missing finite
+data stays unavailable. This mode helps compare the shapes of train and validation
+curves while their raw values remain available. It does not change the X axis or
+automatically reverse metrics whose best direction is lower.
+
+`b` adds raw Min/Max markers. Extrema ties use the first occurrence in step/time
+order. The legend reports logged-step difference, subsequent sample count and
+time distance to that metric's latest recorded data. Chart options can highlight
+Best=Min or Best=Max for a metric; neither metric direction nor epoch mapping is
+inferred. Chart resets affect session display choices, preserving pins and
+notification subscriptions. Comparisons use their own session chart profile.
+
+### Artifact preview
+
+Enter or `p` on an artifact file opens the built-in text preview with line numbers,
+search and scrolling. Valid complete JSON is formatted within a bounded output
+budget; truncated JSON stays a raw prefix, and binary data is labelled instead
+of rendered as terminal text. `b` opens the same preview buffer with `bat`, or an
+available pager. Closing the pager returns to the same TUI context; private
+temporary files are removed on completion, cancellation or launch failure.
+
+The default input limit is 1 MiB (`[tui] preview_max_bytes = 1048576`). Large or
+unknown-size artifacts require confirmation before reading, and confirmation
+retains the configured byte cap. An older artifact proxy may fetch an entire
+cloud object before serving the prefix; its confirmation describes that cost.
+Direct cloud repositories without bounded-read support require the explicit
+download command rather than an implicit complete SDK download. `d`/`D` remain
+the ordinary full-file/directory download actions.
+
+```sh
+lazymlflow artifacts preview RUN_ID metrics.json
+lazymlflow artifacts preview RUN_ID large.json --max-bytes 1048576 --allow-large
+lazymlflow artifacts preview RUN_ID config.json --pager
+lazymlflow artifacts preview RUN_ID config.json --json
+```
+
+Noninteractive previews never prompt: use `--allow-large` to approve large,
+unknown-size or whole-proxy-fetch costs explicitly. `--pager` requires a terminal;
+its temporary file contains only the bounded preview, including any truncation.
 
 The Datasets tab shows every logged input. `{` / `}` changes input, `/` searches
 features, Space expands nested fields, Enter opens complete field details, and
@@ -694,6 +761,10 @@ go test -race ./...
 go build -o bin/lazymlflow ./cmd/lazymlflow
 python3 scripts/pty_smoke.py --binary ./bin/lazymlflow
 python3 scripts/pty_inspection.py --binary ./bin/lazymlflow
+python3 scripts/pty_activity.py --binary ./bin/lazymlflow
+python3 scripts/pty_retention.py --binary ./bin/lazymlflow
+python3 scripts/pty_charts.py --binary ./bin/lazymlflow
+python3 scripts/pty_preview.py --binary ./bin/lazymlflow
 uv run --no-project --with mlflow==3.16.1 python scripts/integration_mlflow.py
 uv run --no-project --with mlflow==3.16.1 --with boto3 python scripts/integration_s3.py
 ```

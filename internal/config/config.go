@@ -23,6 +23,7 @@ type Preferences struct {
 	MetricColumns    []string `toml:"metric_columns,omitempty" json:"metric_columns,omitempty"`
 	ParameterColumns []string `toml:"parameter_columns,omitempty" json:"parameter_columns,omitempty"`
 	RefreshSeconds   int      `toml:"refresh_seconds,omitempty" json:"refresh_seconds,omitempty"`
+	PreviewMaxBytes  int64    `toml:"preview_max_bytes" json:"preview_max_bytes"`
 }
 
 type Config struct {
@@ -99,7 +100,7 @@ func New(path string) *Config {
 }
 
 func defaultConfig(path string) *Config {
-	return &Config{path: path, Activity: core.DefaultActivitySettings()}
+	return &Config{path: path, Activity: core.DefaultActivitySettings(), TUI: Preferences{PreviewMaxBytes: core.DefaultPreviewBytes}}
 }
 func (c *Config) SourcePath() string { return c.path }
 
@@ -117,6 +118,9 @@ func (c *Config) Validate() error {
 	}
 	if c.TUI.RefreshSeconds < 0 {
 		return errors.New("tui.refresh_seconds must be zero or positive")
+	}
+	if c.TUI.PreviewMaxBytes < 0 || c.TUI.PreviewMaxBytes > core.MaxPreviewBytes {
+		return fmt.Errorf("tui.preview_max_bytes must be between 0 (default) and %d", core.MaxPreviewBytes)
 	}
 	seen := map[string]bool{}
 	for _, t := range c.Targets {

@@ -54,7 +54,8 @@ func (m *model) activityPresentationRows(r *runState) []core.RunRow {
 	query := strings.ToLower(r.Local)
 	var rows []core.Run
 	for _, run := range r.Rows {
-		if core.Visible(m.state().Visibility[core.VisibilityKey("run", run.ID())], r.View.Visibility) && strings.Contains(strings.ToLower(run.Name()+" "+run.ID()+" "+run.Info.Status+" "+m.activityExperimentName(run.Info.ExperimentID)), query) {
+		retained := m.activityScope() == scopeRunning && m.activityCurrent() != nil && m.activityCurrent().RetainedRun == run.ID()
+		if core.Visible(m.state().Visibility[core.VisibilityKey("run", run.ID())], r.View.Visibility) && (retained || strings.Contains(strings.ToLower(run.Name()+" "+run.ID()+" "+run.Info.Status+" "+m.activityExperimentName(run.Info.ExperimentID)), query)) {
 			rows = append(rows, run)
 		}
 	}
@@ -64,7 +65,11 @@ func (m *model) activityPresentationRows(r *runState) []core.RunRow {
 	out := make([]core.RunRow, 0, len(rows))
 	for i := range rows {
 		run := &rows[i]
-		out = append(out, core.RunRow{ID: run.ID(), Kind: "run", Run: run, Label: run.Name()})
+		note := ""
+		if m.activityScope() == scopeRunning && m.activityCurrent() != nil && m.activityCurrent().RetainedRun == run.ID() {
+			note = "ended · kept while reading"
+		}
+		out = append(out, core.RunRow{ID: run.ID(), Kind: "run", Run: run, Label: run.Name(), Note: note})
 	}
 	return out
 }
@@ -231,6 +236,9 @@ func (m *model) runContent(w, h int) paneContent {
 	}
 	if m.activityScope() != scopeExperiment {
 		p.add(m.activityDescription())
+		if a := m.activityCurrent(); a != nil && a.Scope == scopeRunning && a.RetainedRun != "" {
+			p.add("Selected run ended · kept while reading · move away or r in list to dismiss")
+		}
 		if a := m.activityCurrent(); a != nil && a.Err != "" {
 			p.add("Refresh failed; cached rows retained")
 			p.add(clean(a.Err))

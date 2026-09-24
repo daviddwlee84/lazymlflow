@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.3.1 — 2026-09-25
+
+- Add cross-experiment Running, Recent, Unread and Alerts views, persistent local read and acknowledgement state, cached experiment counts, and exact-key metric-update subscriptions. Completed selected runs stay visible while being read in Running.
+- Share session overlays within each Activity view, preserve missing metric selections, and add quick overlay toggling, persistent metric pins and ordering.
+- Add raw sample markers, EMA smoothing, independent 0–1 curve scales, and raw extrema with logged-step, sample and time distances. Chart transforms preserve original metric history and never assume that steps are epochs.
+- Preview bounded text and JSON artifacts in the dashboard or CLI, with size-aware confirmation, optional bat/pager viewing of the same prefix, and cleanup of private temporary files.
+- Cancel owned Windows pager process trees before releasing their preview files and terminal session.
+- Expand race, real-terminal and MLflow compatibility checks, including retained Activity selection and bounded artifact reads.
+
 ## 0.3.0 — 2026-09-23
 
 - Add Windows amd64/arm64 ZIP releases, PowerShell completion and verified Scoop installation/upgrade support. Upgrades exit into a private helper with visible progress and queryable final results; checks remain read-only and manager failures never trigger source fallback.

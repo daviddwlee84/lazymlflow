@@ -363,6 +363,7 @@ func (m *model) choosePicker(key string) tea.Cmd {
 		}
 	case "visibility":
 		m.overlay = ""
+		m.releaseActivityRetention()
 		if m.focus == 0 {
 			m.layout.ExperimentVisibility = item.ID
 			before := m.selectedExperiment()

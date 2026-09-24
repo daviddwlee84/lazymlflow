@@ -265,6 +265,7 @@ func (m *model) setVisibility(value core.Visibility) tea.Cmd {
 	if id == "" {
 		return nil
 	}
+	m.releaseActivityRetention()
 	key := core.VisibilityKey(kind, id)
 	s.Visibility[key] = value
 	s.VisibilityTouched[key] = true

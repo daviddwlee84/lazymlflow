@@ -50,6 +50,8 @@ func prepareAttached(cmd *exec.Cmd, in io.Reader) (func(), error) {
 	}, nil
 }
 
+func startedAttached(*exec.Cmd) error { return nil }
+
 func terminateAttached(cmd *exec.Cmd, force bool) {
 	sig := syscall.SIGTERM
 	if force {

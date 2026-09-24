@@ -124,7 +124,7 @@ func (m *model) acceptConnected(v connectedMsg) tea.Cmd {
 }
 func (m *model) refresh() tea.Cmd {
 	if m.activityScope() != scopeExperiment && m.focus < 2 {
-		return m.refreshActivity(false, nil)
+		return m.refreshActivityManually()
 	}
 	if m.activityScope() != scopeExperiment && m.focus == 2 && m.tab != 1 && m.tab != 4 {
 		return m.loadActivityRun(true)

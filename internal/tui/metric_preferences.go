@@ -18,7 +18,9 @@ import (
 // the existing experiment view, independently of which run list is on screen.
 type experimentMetricPreferences struct {
 	Overlay         []string
+	OverlayDisabled bool
 	Mode            string
+	Chart           chartProfile
 	Known           map[string]bool
 	Revision        uint64
 	Loading, Loaded bool
@@ -76,14 +78,19 @@ func metricMetadataKey(run *core.Run) string {
 }
 
 func (m *model) syncMetricPreferences(v *inspectionView, run *core.Run) bool {
-	p, state := m.metricPreferences(run), m.metricExperimentState(run)
+	p, state := m.chartPreferences(run), m.metricExperimentState(run)
 	if p == nil || state == nil {
 		return false
 	}
 	metadata := metricMetadataKey(run)
-	changed := v.MetricMetadata != metadata || v.MetricRevision != p.Revision || v.MetricViewRevision != state.ViewRevision
+	context := m.chartContextKey(run)
+	changed := v.MetricContext != context || v.MetricMetadata != metadata || v.MetricRevision != p.Revision || v.MetricViewRevision != state.ViewRevision
+	v.MetricContext = context
 	v.MetricMetadata, v.MetricRevision, v.MetricViewRevision = metadata, p.Revision, state.ViewRevision
 	v.Overlay = slices.Clone(p.Overlay)
+	if p.OverlayDisabled {
+		v.Overlay = nil
+	}
 	if p.Mode != "" {
 		v.Dashboard, v.ExpandedChart = p.Mode == "dashboard", p.Mode == "curve"
 	}
@@ -94,7 +101,7 @@ func (m *model) rememberMetricMode(v *inspectionView) {
 	if v == nil {
 		return
 	}
-	p := m.metricPreferences(v.Run)
+	p := m.chartPreferences(v.Run)
 	if p == nil {
 		return
 	}
@@ -263,7 +270,7 @@ func (m *model) metricPickerCandidates() []string {
 		return m.metricKeys()
 	}
 	run := m.run()
-	p := m.metricPreferences(run)
+	p := m.chartPreferences(run)
 	if p == nil {
 		return m.metricKeys()
 	}
@@ -291,8 +298,8 @@ func (m *model) beginMetricOverlay(v *inspectionView) {
 	if v == nil || v.Run == nil {
 		return
 	}
-	m.inspect.OverlayDraft = slices.Clone(v.Overlay)
-	m.inspect.OverlayDraftKey = metricExperimentKey(m.historyNamespace(), v.Run.Info.ExperimentID)
+	m.inspect.OverlayDraft = slices.Clone(m.chartPreferences(v.Run).Overlay)
+	m.inspect.OverlayDraftKey = m.chartContextKey(v.Run)
 }
 
 func (m *model) toggleMetricOverlay(key string) {
@@ -307,12 +314,13 @@ func (m *model) toggleMetricOverlay(key string) {
 }
 
 func (m *model) applyMetricOverlay(v *inspectionView) tea.Cmd {
-	if v == nil || v.Run == nil || m.inspect.OverlayDraftKey != metricExperimentKey(m.historyNamespace(), v.Run.Info.ExperimentID) {
+	if v == nil || v.Run == nil || m.inspect.OverlayDraftKey != m.chartContextKey(v.Run) {
 		m.overlay = ""
 		return nil
 	}
-	p := m.metricPreferences(v.Run)
+	p := m.chartPreferences(v.Run)
 	p.Overlay = slices.Clone(m.inspect.OverlayDraft)
+	p.OverlayDisabled = false
 	p.Mode = "curve"
 	p.Revision++
 	v.Overlay = slices.Clone(p.Overlay)
